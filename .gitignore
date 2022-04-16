@@ -7,3 +7,4 @@ _ssh_to_debianvm.sh
 !build/_placeholder
 !obj/_placeholder
 *.todo
+.vscode/*

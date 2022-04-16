@@ -11,48 +11,28 @@
 #define SHELL_TYPE_CLIENT 1
 #define SHELL_TYPE_SERVER 2
 
+#define PROMPT_DELIMITER '|'
+
 const char help[] = "\n\
-Interactive C-Shell for SPAASM\n\
-Ondrej Spanik 2022 (c) iairu.com\n\
-\n\
-Arguments:\n\
-\ttodo\n\
-\n\
-Shell commands:\n\
-\thelp - Prints this help message\n\
-\thalt - Halts the shell execution completely\n\
+[seeHell]\n\
+\tInteractive C-Shell for SPAASM\n\
+\tOndrej Spanik 2022 (c) iairu.com\n\
+- Arguments:\n\
+\t-p <number>   Runs socketed on the given port number\n\
+\t-u <sockname> Runs socketed on the given AF_UNIX socket name\n\
+\t              If neither -p nor -u are specified, shell runs unsocketed\n\
+\t-c            Switches from server to client (with -p, -u specified)\n\
+\t-h            Displays help (this message)\n\
+- Commands:\n\
+\thalt          Halts the shell execution completely\n\
+\thelp          Displays help (this message)\n\
 ";
 
-char *getprompt() {
-    // user name
-    char *name = getpwuid(sc_getuid())->pw_name;
-    
-    // host name
-    char hostname[256];
-    hostname[255] = '\0';
-    gethostname(hostname, 254);
-
-    // lengths often reused
-    int hostname_len = strlen(hostname);
-    int name_len = strlen(name);
-
-    // build the prompt
-    char *prompt; // 3 => @ : \0, -1 lebo adresovanie od 0
-    if ((prompt = malloc(hostname_len + name_len + 3 - 1)) == NULL)
-        return NULL;
-    strcpy(prompt, name);
-    prompt[name_len] = '@';
-    strcpy(prompt + name_len + 1, hostname);
-    prompt[name_len + hostname_len + 1] = ':';
-    prompt[name_len + hostname_len + 2] = '\0';
-
-    return prompt;
-}
 
 // processes supported arguments into respective variables
 // sizeof(shell_sockname) => shell_sockname_size for constant-sized char arrays
 // returns 1 on error, 0 if no error
-char processargs(int argc, char* argv[], char* shell_type, int* shell_port, char* shell_sockname, unsigned int shell_sockname_size) {
+char processArgs(int argc, char* argv[], char* shell_type, int* shell_port, char* shell_sockname, unsigned int shell_sockname_size) {
     int i;
     char flag = '\0';
     for (i = 1; i < argc; i++) {
@@ -81,9 +61,10 @@ char processargs(int argc, char* argv[], char* shell_type, int* shell_port, char
                 (*shell_type) = SHELL_TYPE_CLIENT;
                 flag = '\0';
                 break;
-            case 'h': // print help and exit
+            case 'h': // print help
                 printf("%s\n", help);
-                return 0;
+                flag = '\0';
+                break;
         }
     }
     if (flag != '\0') {
@@ -97,13 +78,43 @@ char processargs(int argc, char* argv[], char* shell_type, int* shell_port, char
     return 0;
 }
 
+// gets the prompt using syscalls roughly as follows: SYS_TIME SYS_GETPWUID@SYS_HOSTNAME:
+char *getPrompt() {
+    // time
+    // todo
+
+    // user name
+    char *name = getpwuid(sc_getuid())->pw_name;
+    
+    // host name
+    char hostname[256];
+    hostname[255] = '\0';
+    gethostname(hostname, 254);
+
+    // lengths often reused
+    int hostname_len = strlen(hostname);
+    int name_len = strlen(name);
+
+    // build the prompt
+    char *prompt; // 3 => @ : \0, -1 lebo adresovanie od 0
+    if ((prompt = malloc(hostname_len + name_len + 3 - 1)) == NULL)
+        return NULL;
+    strcpy(prompt, name);
+    prompt[name_len] = '@';
+    strcpy(prompt + name_len + 1, hostname);
+    prompt[name_len + hostname_len + 1] = PROMPT_DELIMITER;
+    prompt[name_len + hostname_len + 2] = '\0';
+
+    return prompt;
+}
+
 int main(int argc, char* argv[]) {
     // argument handling
     char shell_type = SHELL_TYPE_LOCAL;
     int shell_port = 0;
     char shell_sockname[255];
     memset(shell_sockname, '\0', sizeof(shell_sockname));
-    if (processargs(argc, argv, &shell_type, &shell_port, shell_sockname, sizeof(shell_sockname))) return ERR_WRONGARG;
+    if (processArgs(argc, argv, &shell_type, &shell_port, shell_sockname, sizeof(shell_sockname))) return ERR_WRONGARG;
 
     // socket preparation
     // todo if server && port: port availability check
@@ -111,40 +122,40 @@ int main(int argc, char* argv[]) {
 
     // inform the user
     printf("Welcome to seeHell, running as a [%s].\n\n", 
-        (shell_type == SHELL_TYPE_LOCAL) ? "local" :
-        (shell_type == SHELL_TYPE_CLIENT) ? "tcp client" :
-        (shell_type == SHELL_TYPE_SERVER) ? "tcp server" : "???"
+        (shell_type == SHELL_TYPE_LOCAL) ? "local self" :
+        (shell_type == SHELL_TYPE_CLIENT) ? "local unix client" :
+        (shell_type == SHELL_TYPE_SERVER) ? "local unix server" : "???"
         );
 
-    // // get the prompt
-    // char *prompt = getprompt();
-    // if (prompt == NULL) return ERR_MALLOC;
-    // // user input buffer
-    // char *uinput = malloc(4096);
-    // if (uinput == NULL) return ERR_MALLOC;
+    // get the prompt
+    char *prompt = getPrompt();
+    if (prompt == NULL) return ERR_MALLOC;
+    // user input buffer
+    char *uinput = malloc(4096);
+    if (uinput == NULL) return ERR_MALLOC;
 
-    // // interactive shell until "halt" encountered
-    // while (1 == 1) {
-    //     // show prompt
-    //     printf("%s ", prompt); // todo "%s%s ",prompt,path maybe
+    // interactive shell until "halt" encountered
+    while (1 == 1) {
+        // show prompt
+        printf("%s ", prompt); // todo "%s%s ",prompt,path maybe
         
-    //     // user input
-    //     if (fgets(uinput, 4096, stdin) == NULL) return ERR_FGETS;
-    //     rewind(stdin);                        // remove any trailing STDIN
-    //     uinput[strcspn(uinput, "\n")] = '\0'; // remove trailing newline STDOUT
-    //     // todo split executable from arguments
-    //     // printf("[%s]\n", uinput);
+        // user input
+        if (fgets(uinput, 4096, stdin) == NULL) return ERR_FGETS;
+        rewind(stdin);                        // remove any trailing STDIN
+        uinput[strcspn(uinput, "\n")] = '\0'; // remove trailing newline STDOUT
+        // todo split executable from arguments
+        // printf("[%s]\n", uinput);
 
-    //     // command execution
-    //     if      (strcmp(uinput, "halt") == 0) break;
-    //     else if (strcmp(uinput, "help") == 0) printf("%s\n", help);
-    //     else    fprintf(stderr, "Unrecognized command.\n");
+        // command execution
+        if      (strcmp(uinput, "halt") == 0) break;
+        else if (strcmp(uinput, "help") == 0) printf("%s\n", help);
+        else    fprintf(stderr, "Unrecognized command.\n");
 
-    // };
+    };
 
-    // // free buffers
-    // free(prompt);
-    // free(uinput);
+    // free buffers
+    free(prompt);
+    free(uinput);
 
     return 0;
 }
