@@ -1,6 +1,6 @@
 .intel_syntax noprefix  # use INTEL ASM syntax instead of the default GCC AT&T
 .text
-    .globl syscall # _start
+    .globl sc_syscall # _start
 
     # in case -nostdlib used but then c include doesn't work
     # otherwise stdlib has _start
@@ -18,7 +18,7 @@
     #     int 0x80
     #     ret
 
-    syscall:
+    sc_syscall:
         # Register mapping: https://en.wikibooks.org/wiki/X86_Assembly/Interfacing_with_Linux#Via_interrupt
         # 32-bit 0x80 => eax, ebx, ecx, edx, esi, edi
         # 64-bit syscall would be different!
