@@ -1,0 +1,9 @@
+build/*
+obj/*
+_research/*
+_zadanie/*
+_ssh_to_debianvm.sh
+*.code-workspace
+!build/_placeholder
+!obj/_placeholder
+*.todo
