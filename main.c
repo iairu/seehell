@@ -120,19 +120,19 @@ void printPrompt() {
         );
 }
 
-char *ltrim(char *str) {
+char *ltrim(char* str) {
     while((*str) == ' ') str++;
     return str;
 }
 
-char *rtrim(char *str) {
-    char* end = str + strlen(str);
+char *rtrim(char* str) {
+    char *end = str + strlen(str);
     while((*(--end)) == ' ');
     *(++end) = '\0';
     return str;
 }
 
-char *trim(char *str) {
+char *trim(char* str) {
     return ltrim(rtrim(str)); 
 }
 
@@ -148,6 +148,114 @@ void changedir(char* arg) {
         printf("[%s]\n", arg);
         if (chdir(arg) != 0) perror("cd error");
     }
+}
+
+char **splitArgs(char* input, int* count_out) {
+    char **args = NULL;
+    char buffer[SHELL_USERINPUT_MAX];
+    memset(buffer, '\0', sizeof(buffer));
+    char *bp = NULL;
+    char *ip = NULL;
+    char **ap = NULL;
+    char quote = 0;
+    char waschar = 0;
+    int count = 0;
+
+    // count the number of arguments
+    ip = input;
+    ip--;
+    while((*++ip) != '\0') {
+        switch(*ip) {
+            case '\"': 
+                quote = !quote;
+                if (quote) continue; // don't count the quote as arg character
+            case ' ':
+                if (!quote && waschar) {
+                    // end of a non-empty argument within or outside quotes
+                    count++;
+                    waschar = 0;
+                    continue;
+                }
+                if (!quote) continue; // don't count space outside quotes as arg character
+            default:
+                // any non-quote characters, except spaces outside quotes
+                waschar = 1;
+        }
+    }
+    if (quote) {
+        fprintf(stderr, "Matching quote not found.\n");
+        return NULL;
+    }
+    if (ip != input && *(ip - 1) != '\"') {
+        // if there have been any arguments
+        // count the last unqoted argument in 
+        // quoted args have already been counted on quotes
+        count++;
+    }
+    waschar = 0;
+    // printf("arg count: %d\n", count);
+
+    // malloc buffers for the number of arguments
+    // todo freed outside function after use incl. all children to be malloc'd below
+    args = malloc(count * sizeof(char*));
+    if (args == NULL) return NULL;
+    (*count_out) = count;
+
+    // save the arguments
+    bp = buffer;
+    ip = input;
+    ap = args;
+    ip--;
+    while((*++ip) != '\0') {
+        switch(*ip) {
+            case '\"': 
+                quote = !quote;
+                if (quote) continue; // don't count the quote as arg character
+            case ' ':
+                if (!quote && waschar) {
+                    // end of a non-empty argument within or outside quotes
+                    (*bp) = '\0'; // end buffer
+                    // printf("%s\n", buffer);
+                    (*ap) = malloc((strlen(buffer) + 1) * sizeof(char));
+                    if ((*ap) == NULL) {
+                        // todo free previous memory
+                        return NULL;
+                    }
+                    strcpy((*ap++), buffer);
+                    bp = buffer; // reset buffer position
+                    waschar = 0;
+                    continue;
+                }
+                if (!quote) continue; // don't count space outside quotes as arg character
+            default:
+                // any non-quote characters, except spaces outside quotes
+                waschar = 1;
+                (*bp++) = (*ip); // add to buffer (buffer overflow is protected outside function by max uinput size)
+        }
+    }
+    // if (quote) {...} // already checked during counting
+    if (ip != input && *(ip - 1) != '\"') {
+        // if there have been any arguments
+        // count the last unqoted argument in 
+        // quoted args have already been counted on quotes
+        (*bp) = '\0'; // end buffer
+        // printf("%s\n", buffer);
+        (*ap) = malloc((strlen(buffer) + 1) * sizeof(char));
+        if ((*ap) == NULL) {
+            // todo free previous memory
+            return NULL;
+        }
+        strcpy((*ap), buffer);
+    }
+
+    return args;
+}
+
+void freeArgs(char **args, int argc) {
+    int i;
+    for(i = 0; i < argc; i++)
+        free(args[i]);
+    free(args);
 }
 
 int main(int argc, char* argv[]) {
@@ -170,8 +278,11 @@ int main(int argc, char* argv[]) {
         );
 
     // user input buffer
-    char *uinput = malloc(SHELL_USERINPUT_MAX);
-    if (uinput == NULL) return ERR_MALLOC;
+    char *uinput = malloc(SHELL_USERINPUT_MAX * sizeof(char));
+    if (uinput == NULL) {
+        fprintf(stderr, "Memory allocation error.\n");
+        return ERR_MALLOC;
+    }
 
     // interactive shell until "halt" encountered
     while (1 == 1) {
@@ -200,6 +311,18 @@ int main(int argc, char* argv[]) {
         // todo - split executable from arguments
         // todo - check whether non ./ executable is in PATH and ./ is in pwd
         // todo - if no executable found print to stderr
+
+        // argument preparation for program execution
+        int shell_argc = 0;
+        char **shell_args = splitArgs(uinput, &shell_argc);
+        if (shell_args == NULL) {
+            fprintf(stderr, "Memory allocation error.\n");
+            return ERR_MALLOC;
+        }
+        for (int i = 0; i < shell_argc; i++) printf("%s\n", shell_args[i]);
+
+        // free arguments used in program execution
+        freeArgs(shell_args, shell_argc);
 
     };
 
