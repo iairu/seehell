@@ -1,5 +1,6 @@
-// todo docs
-// https://the-linux-channel.the-toffee-project.org/index.php?page=5-tutorials-a-linux-system-call-in-c-without-a-standard-library&lang=en
+// custom syscall interface with x86 assembly
+// uses the 0x80 interrupt method (32-bit style)
+// "SC_HELP_NOTES" reference for other relevant used syscalls
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,7 +11,8 @@
 #define SC_UNUSED_FUNC
 
 // syscall interface with assembly (syscall.S)
-void* sc_syscall(
+// ref: https://the-linux-channel.the-toffee-project.org/index.php?page=5-tutorials-a-linux-system-call-in-c-without-a-standard-library&lang=en
+void* sc_syscall( // renamed from syscall to sc_syscall because of overlap with a library function
     void* syscall_number, // 32 bit 0x80 interrupt based (sys_write => 4, ...)
     // ref: http://faculty.nps.edu/cseagle/assembly/sys_call.html
     void* param1,
