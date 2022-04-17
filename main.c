@@ -3,6 +3,8 @@
 #include <stdlib.h> // malloc
 #include <time.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include "syscall.h"
 
 
@@ -43,6 +45,8 @@ const char help[] = "\n\
 \thelp          Displays help (this message)\n\
 ";
 
+// man 3 exec
+extern char **environ;
 
 // processes supported arguments into respective variables
 // sizeof(shell_sockname) => shell_sockname_size for constant-sized char arrays
@@ -146,11 +150,11 @@ void changedir(char* arg) {
     // also if no input => cd to HOME directory
     if (arg == NULL || (arg = trim(arg))[0] == '\0') {
         char *homedir = getpwuid(sc_getuid())->pw_dir;
-        printf("[%s]\n", homedir);
+        // printf("[%s]\n", homedir);
         if (chdir(homedir) != 0) perror("cd error");
     } else {
         // process the user input as a directory location
-        printf("[%s]\n", arg);
+        // printf("[%s]\n", arg);
         if (chdir(arg) != 0) perror("cd error");
     }
 }
@@ -220,11 +224,12 @@ char **parseArgs(char* input, int* count_out) {
 
     // malloc buffers for the number of arguments
     // freed outside function after use incl. all children to be malloc'd below
-    args = malloc(count * sizeof(char*));
+    args = malloc((count + 1) * sizeof(char*));
     if (args == NULL) {
         fprintf(stderr, "Memory allocation error.\n");
         return NULL;
     }
+    args[count] = (char *) NULL; // requirement for exec to NULL-terminate the pointer array
     (*count_out) = count;
 
     // save the arguments
@@ -300,9 +305,16 @@ char **parseArgs(char* input, int* count_out) {
 // free arguments retreived from parseArgs
 void freeArgs(char **args, int argc) {
     int i;
-    for(i = 0; i < argc; i++)
+    for(i = 0; i < argc + 1; i++) // incl. NULL-terminated pointer at the end
         free(args[i]);
     free(args);
+}
+
+// handle child process behavior after successful forking
+void handleChild(char *const args[], int argc) {
+    if (argc == 0) return;
+    // man 3 exec
+    execvp(args[0], args); // takes the extern char **environ variable
 }
 
 
@@ -374,6 +386,20 @@ int main(int argc, char* argv[]) {
         // todo - check whether non ./ executable is in PATH and ./ is in pwd
         // todo - if no executable found print to stderr
 
+        // program execution
+        pid_t pid;
+        int wstatus;
+        pid = fork(); // man 2 fork
+        switch(pid) {
+            case -1: perror("fork error"); break;
+            case 0: handleChild(shell_args, shell_argc);
+            default:
+                // pid is set to child pid
+                // must wait for child to finish executing
+                // then resume interactive shell
+                wait(&wstatus); // man 2 wait
+                // printf("child [%d] exited with status [%d]\n", pid, wstatus);
+        }
 
         // free arguments used in program execution
         freeArgs(shell_args, shell_argc);
