@@ -12,6 +12,7 @@
 #define ERR_MALLOC 1
 #define ERR_FGETS 2
 #define ERR_WRONGARG 3
+#define ERR_EXECFAIL 4
 
 #define SHELL_TYPE_LOCAL 0
 #define SHELL_TYPE_CLIENT 1
@@ -160,10 +161,15 @@ void changedir(char* arg) {
 }
 
 // parse internal user input as arguments for external command execution
-char **parseArgs(char* input, int* count_out) {
+// all parameters except the first are output
+char **parseArgs(char* input, int* _argc, char** _redir_in, char** _redir_out) {
     char **args = NULL;
     char buffer[SHELL_USERINPUT_MAX];
     memset(buffer, '\0', sizeof(buffer));
+    
+    (*_redir_in) = NULL;
+    (*_redir_out) = NULL;
+    
     char *bp = NULL;
     char *ip = NULL;
     char **ap = NULL;
@@ -171,6 +177,8 @@ char **parseArgs(char* input, int* count_out) {
     char waschar = 0;
     char escaped = 0;
     char commented = 0;
+    char redirected = 0;
+    char **redir;
     int count = 0;
 
     // count the number of arguments
@@ -181,6 +189,12 @@ char **parseArgs(char* input, int* count_out) {
             case '\\':
                 if (!escaped) {
                     escaped = 1;
+                    continue;
+                }
+            case '<':
+            case '>':
+                if (!escaped) {
+                    redirected = 1;
                     continue;
                 }
             case '#':
@@ -197,8 +211,9 @@ char **parseArgs(char* input, int* count_out) {
                 if (!escaped) {
                     if (!quote && waschar) {
                         // end of a non-empty argument within or outside quotes
-                        count++;
+                        if (!redirected) count++;
                         waschar = 0;
+                        redirected = 0;
                         continue;
                     }
                     if (!quote) continue; // don't count space outside quotes as arg character
@@ -217,7 +232,7 @@ char **parseArgs(char* input, int* count_out) {
         // if there have been any arguments
         // count the last unqoted argument in 
         // quoted args have already been counted on quotes
-        count++;
+        if (!redirected) count++;
     }
 
     // printf("arg count: %d\n", count);
@@ -230,12 +245,13 @@ char **parseArgs(char* input, int* count_out) {
         return NULL;
     }
     args[count] = (char *) NULL; // requirement for exec to NULL-terminate the pointer array
-    (*count_out) = count;
+    (*_argc) = count;
 
     // save the arguments
     waschar = 0;
     escaped = 0;
     commented = 0;
+    redirected = 0;
     bp = buffer;
     ip = input;
     ap = args;
@@ -245,6 +261,16 @@ char **parseArgs(char* input, int* count_out) {
             case '\\':
                 if (!escaped) {
                     escaped = 1;
+                    continue;
+                }
+            case '<':
+                if (!escaped) {
+                    redirected = 1;
+                    continue;
+                }
+            case '>':
+                if (!escaped) {
+                    redirected = 2;
                     continue;
                 }
             case '#':
@@ -263,13 +289,26 @@ char **parseArgs(char* input, int* count_out) {
                         // end of a non-empty argument within or outside quotes
                         (*bp) = '\0'; // end buffer
                         // printf("%s\n", buffer);
-                        (*ap) = malloc((strlen(buffer) + 1) * sizeof(char));
-                        if ((*ap) == NULL) {
-                            // _todo free previous memory
-                            fprintf(stderr, "Memory allocation error.\n");
-                            return NULL;
+                        if (!redirected) {
+                            (*ap) = malloc((strlen(buffer) + 1) * sizeof(char));
+                            if ((*ap) == NULL) {
+                                // _todo free previous memory
+                                fprintf(stderr, "Memory allocation error.\n");
+                                return NULL;
+                            }
+                            strcpy((*ap++), buffer);
+                        } else {
+                            redir = (redirected == 1) ? _redir_in : _redir_out; 
+                            if ((*redir) == NULL)
+                                (*redir) = malloc(SHELL_USERINPUT_MAX * sizeof(char));
+                            if ((*redir) == NULL) {
+                                // _todo free previous memory
+                                fprintf(stderr, "Memory allocation error.\n");
+                                return NULL;
+                            }
+                            strcpy((*redir), buffer);
+                            redirected = 0;
                         }
-                        strcpy((*ap++), buffer);
                         bp = buffer; // reset buffer position
                         waschar = 0;
                         continue;
@@ -290,24 +329,40 @@ char **parseArgs(char* input, int* count_out) {
         // quoted args have already been counted on quotes
         (*bp) = '\0'; // end buffer
         // printf("%s\n", buffer);
-        (*ap) = malloc((strlen(buffer) + 1) * sizeof(char));
-        if ((*ap) == NULL) {
-            // _todo free previous memory
-            fprintf(stderr, "Memory allocation error.\n");
-            return NULL;
+        if (!redirected) {
+            (*ap) = malloc((strlen(buffer) + 1) * sizeof(char));
+            if ((*ap) == NULL) {
+                // _todo free previous memory
+                fprintf(stderr, "Memory allocation error.\n");
+                return NULL;
+            }
+            strcpy((*ap), buffer);
+        } else {
+            redir = (redirected == 1) ? _redir_in : _redir_out; 
+            if ((*redir) == NULL)
+                (*redir) = malloc(SHELL_USERINPUT_MAX * sizeof(char));
+            if ((*redir) == NULL) {
+                // _todo free previous memory
+                fprintf(stderr, "Memory allocation error.\n");
+                return NULL;
+            }
+            strcpy((*redir), buffer);  
+            redirected = 0;
         }
-        strcpy((*ap), buffer);
     }
 
     return args;
 }
 
 // free arguments retreived from parseArgs
-void freeArgs(char **args, int argc) {
+void freeArgs(char **args, int argc, char *redir_in, char *redir_out) {
     int i;
     for(i = 0; i < argc + 1; i++) // incl. NULL-terminated pointer at the end
         free(args[i]);
     free(args);
+    if (redir_in != NULL) free(redir_in);
+    if (redir_out != NULL) free(redir_out);
+        
 }
 
 // handle child process behavior after successful forking
@@ -315,6 +370,7 @@ void handleChild(char *const args[], int argc) {
     if (argc == 0) return;
     // man 3 exec
     execvp(args[0], args); // takes the extern char **environ variable
+    // if the execution fails (e.g. program doesnt exist), return will be used outside
 }
 
 
@@ -377,10 +433,13 @@ int main(int argc, char* argv[]) {
         
         // argument preparation for program execution
         int shell_argc = 0;
-        char **shell_args = parseArgs(uinput, &shell_argc);
+        char *shell_redir_in, *shell_redir_out;
+        char **shell_args = parseArgs(uinput, &shell_argc, &shell_redir_in, &shell_redir_out);
         if (shell_args == NULL) continue; // error parsing arguments, command can't be processed
         // for (int i = 0; i < shell_argc; i++) printf("%s\n", shell_args[i]);
-
+        if (shell_redir_in != NULL) printf("< [%s]\n", shell_redir_in);
+        if (shell_redir_out != NULL) printf("> [%s]\n", shell_redir_out);
+        
         // todo non-builtin commands are looked up as executables
         // todo - split executable from arguments
         // todo - check whether non ./ executable is in PATH and ./ is in pwd
@@ -392,18 +451,18 @@ int main(int argc, char* argv[]) {
         pid = fork(); // man 2 fork
         switch(pid) {
             case -1: perror("fork error"); break;
-            case 0: handleChild(shell_args, shell_argc);
+            case 0: handleChild(shell_args, shell_argc); return ERR_EXECFAIL;
             default:
                 // pid is set to child pid
                 // must wait for child to finish executing
                 // then resume interactive shell
                 wait(&wstatus); // man 2 wait
                 // printf("child [%d] exited with status [%d]\n", pid, wstatus);
+                
         }
 
         // free arguments used in program execution
-        freeArgs(shell_args, shell_argc);
-
+        freeArgs(shell_args, shell_argc, shell_redir_in, shell_redir_out);        
     };
 
     // free buffers

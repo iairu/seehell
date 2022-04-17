@@ -49,8 +49,9 @@ Additional processing behavior:
 - Double quotes `"` are treated as special characters unless escaped with `\`. They allow for (multiple) spaces to be inserted without the need for individual escapes.
 - Spaces are allowed to be escaped for literal treatment.
 - Check for matching pair of double quotes.
+- Processing of `n>` (stream redirection) is not considered because it is viewed as a separate operator from `>`
 
 # Improvement suggestions
 
 - Major improvements are flagged with `// todo` within code 
-- Minor improvements are flagged with `// _todo` within code 
+- Minor improvements are flagged with `// _todo` within code
