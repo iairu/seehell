@@ -106,3 +106,9 @@ struct passwd *getpwuid(sc_uid_t uid); // builtin
 // unistd.h
 int gethostname(char *name, sc_size_t len); 
 #endif
+
+// man 2 chdir
+#ifndef SC_HELP_NOTES
+// unistd.h
+int chdir(const char *path);
+#endif

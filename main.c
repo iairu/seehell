@@ -140,15 +140,13 @@ void changedir(char* arg) {
     // check for input and trim arg
     // also if no input => cd to HOME directory
     if (arg == NULL || (arg = trim(arg))[0] == '\0') {
-        // todo get HOME_DIR
-        // todo cd to HOME_DIR
-        printf("[HOME_DIR]\n");
+        char *homedir = getpwuid(sc_getuid())->pw_dir;
+        printf("[%s]\n", homedir);
+        if (chdir(homedir) != 0) perror("cd error");
     } else {
-        // todo if no quotes and spaces found => error: too many arguments
-        // todo check if arg exists => error: no such file or directory
-        // todo check if arg is dir
-        // todo cd to arg
+        // process the user input as a directory location
         printf("[%s]\n", arg);
+        if (chdir(arg) != 0) perror("cd error");
     }
 }
 
