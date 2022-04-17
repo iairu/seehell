@@ -69,7 +69,7 @@ char processArgs(int argc, char* argv[], char* shell_type, int* shell_port, char
                 break;
             case 'u': // set socket name (and server if not flagged as a client)
                 (*shell_type) = ((*shell_type) == SHELL_TYPE_LOCAL) ? SHELL_TYPE_SERVER : (*shell_type);
-                strncpy(shell_sockname, argv[i], shell_sockname_size); // todo no checks are made for socket name input
+                strncpy(shell_sockname, argv[i], shell_sockname_size); // _todo no checks are made for socket name input
                 flag = '\0';
                 break;
             case 'c': // flag as a client
@@ -120,11 +120,13 @@ void printPrompt() {
         );
 }
 
+// remove spaces from the left
 char *ltrim(char* str) {
     while((*str) == ' ') str++;
     return str;
 }
 
+// remove spaces from the right
 char *rtrim(char* str) {
     char *end = str + strlen(str);
     while((*(--end)) == ' ');
@@ -132,10 +134,13 @@ char *rtrim(char* str) {
     return str;
 }
 
+// remove spaces from both left and right
 char *trim(char* str) {
     return ltrim(rtrim(str)); 
 }
 
+// set the current working directory
+// verifiable using external ls or pwd
 void changedir(char* arg) {
     // check for input and trim arg
     // also if no input => cd to HOME directory
@@ -150,7 +155,8 @@ void changedir(char* arg) {
     }
 }
 
-char **splitArgs(char* input, int* count_out) {
+// parse internal user input as arguments for external command execution
+char **parseArgs(char* input, int* count_out) {
     char **args = NULL;
     char buffer[SHELL_USERINPUT_MAX];
     memset(buffer, '\0', sizeof(buffer));
@@ -159,82 +165,121 @@ char **splitArgs(char* input, int* count_out) {
     char **ap = NULL;
     char quote = 0;
     char waschar = 0;
+    char escaped = 0;
+    char commented = 0;
     int count = 0;
 
     // count the number of arguments
     ip = input;
     ip--;
-    while((*++ip) != '\0') {
+    while((*++ip) != '\0' && !commented) {
         switch(*ip) {
-            case '\"': 
-                quote = !quote;
-                if (quote) continue; // don't count the quote as arg character
-            case ' ':
-                if (!quote && waschar) {
-                    // end of a non-empty argument within or outside quotes
-                    count++;
-                    waschar = 0;
+            case '\\':
+                if (!escaped) {
+                    escaped = 1;
                     continue;
                 }
-                if (!quote) continue; // don't count space outside quotes as arg character
+            case '#':
+                if (!escaped) {
+                    commented = 1;
+                    continue;
+                }
+            case '\"':
+                if (!escaped) {
+                    quote = !quote;
+                    if (quote) continue; // don't count the quote as arg character
+                }
+            case ' ':
+                if (!escaped) {
+                    if (!quote && waschar) {
+                        // end of a non-empty argument within or outside quotes
+                        count++;
+                        waschar = 0;
+                        continue;
+                    }
+                    if (!quote) continue; // don't count space outside quotes as arg character
+                }
             default:
                 // any non-quote characters, except spaces outside quotes
                 waschar = 1;
+                escaped = 0;
         }
     }
     if (quote) {
         fprintf(stderr, "Matching quote not found.\n");
         return NULL;
     }
-    if (ip != input && *(ip - 1) != '\"') {
+    if (waschar) {
         // if there have been any arguments
         // count the last unqoted argument in 
         // quoted args have already been counted on quotes
         count++;
     }
-    waschar = 0;
+
     // printf("arg count: %d\n", count);
 
     // malloc buffers for the number of arguments
-    // todo freed outside function after use incl. all children to be malloc'd below
+    // freed outside function after use incl. all children to be malloc'd below
     args = malloc(count * sizeof(char*));
-    if (args == NULL) return NULL;
+    if (args == NULL) {
+        fprintf(stderr, "Memory allocation error.\n");
+        return NULL;
+    }
     (*count_out) = count;
 
     // save the arguments
+    waschar = 0;
+    escaped = 0;
+    commented = 0;
     bp = buffer;
     ip = input;
     ap = args;
     ip--;
-    while((*++ip) != '\0') {
+    while((*++ip) != '\0' && !commented) {
         switch(*ip) {
-            case '\"': 
-                quote = !quote;
-                if (quote) continue; // don't count the quote as arg character
-            case ' ':
-                if (!quote && waschar) {
-                    // end of a non-empty argument within or outside quotes
-                    (*bp) = '\0'; // end buffer
-                    // printf("%s\n", buffer);
-                    (*ap) = malloc((strlen(buffer) + 1) * sizeof(char));
-                    if ((*ap) == NULL) {
-                        // todo free previous memory
-                        return NULL;
-                    }
-                    strcpy((*ap++), buffer);
-                    bp = buffer; // reset buffer position
-                    waschar = 0;
+            case '\\':
+                if (!escaped) {
+                    escaped = 1;
                     continue;
                 }
-                if (!quote) continue; // don't count space outside quotes as arg character
+            case '#':
+                if (!escaped) {
+                    commented = 1;
+                    continue;
+                }
+            case '\"': 
+                if (!escaped) {
+                    quote = !quote;
+                    if (quote) continue; // don't count the quote as arg character
+                }
+            case ' ':
+                if (!escaped) {
+                    if (!quote && waschar) {
+                        // end of a non-empty argument within or outside quotes
+                        (*bp) = '\0'; // end buffer
+                        // printf("%s\n", buffer);
+                        (*ap) = malloc((strlen(buffer) + 1) * sizeof(char));
+                        if ((*ap) == NULL) {
+                            // _todo free previous memory
+                            fprintf(stderr, "Memory allocation error.\n");
+                            return NULL;
+                        }
+                        strcpy((*ap++), buffer);
+                        bp = buffer; // reset buffer position
+                        waschar = 0;
+                        continue;
+                    }
+                    if (!quote) continue; // don't count space outside quotes as arg character
+                }
             default:
                 // any non-quote characters, except spaces outside quotes
                 waschar = 1;
                 (*bp++) = (*ip); // add to buffer (buffer overflow is protected outside function by max uinput size)
+                escaped = 0;
         }
     }
     // if (quote) {...} // already checked during counting
-    if (ip != input && *(ip - 1) != '\"') {
+    if (waschar) {
         // if there have been any arguments
         // count the last unqoted argument in 
         // quoted args have already been counted on quotes
@@ -242,7 +287,8 @@ char **splitArgs(char* input, int* count_out) {
         // printf("%s\n", buffer);
         (*ap) = malloc((strlen(buffer) + 1) * sizeof(char));
         if ((*ap) == NULL) {
-            // todo free previous memory
+            // _todo free previous memory
+            fprintf(stderr, "Memory allocation error.\n");
             return NULL;
         }
         strcpy((*ap), buffer);
@@ -251,12 +297,19 @@ char **splitArgs(char* input, int* count_out) {
     return args;
 }
 
+// free arguments retreived from parseArgs
 void freeArgs(char **args, int argc) {
     int i;
     for(i = 0; i < argc; i++)
         free(args[i]);
     free(args);
 }
+
+
+// --------------------------------------
+// --------------------------------------
+// --------------------------------------
+// --------------------------------------
 
 int main(int argc, char* argv[]) {
     // argument handling
@@ -295,7 +348,8 @@ int main(int argc, char* argv[]) {
         uinput[strcspn(uinput, "\n")] = '\0'; // remove trailing newline STDOUT
         // printf("[%s]\n", uinput);
 
-        // command execution
+        // built-in command execution
+        // _todo argument parsing for built-ins (no use-case found for now)
         char builtin = 1;
         if      (strcmp(uinput, "halt") == 0) break; // break out of the interactive shell
         else if (strcmp(uinput, "quit") == 0) break; // todo quit connection (client sends quit to server,
@@ -307,19 +361,19 @@ int main(int argc, char* argv[]) {
         if (builtin) continue;
         // else    fprintf(stderr, "Unrecognized command.\n");
 
+        // todo splitArgs() into separate runs (additional while loop) by ';' character
+        
+        // argument preparation for program execution
+        int shell_argc = 0;
+        char **shell_args = parseArgs(uinput, &shell_argc);
+        if (shell_args == NULL) continue; // error parsing arguments, command can't be processed
+        // for (int i = 0; i < shell_argc; i++) printf("%s\n", shell_args[i]);
+
         // todo non-builtin commands are looked up as executables
         // todo - split executable from arguments
         // todo - check whether non ./ executable is in PATH and ./ is in pwd
         // todo - if no executable found print to stderr
 
-        // argument preparation for program execution
-        int shell_argc = 0;
-        char **shell_args = splitArgs(uinput, &shell_argc);
-        if (shell_args == NULL) {
-            fprintf(stderr, "Memory allocation error.\n");
-            return ERR_MALLOC;
-        }
-        for (int i = 0; i < shell_argc; i++) printf("%s\n", shell_args[i]);
 
         // free arguments used in program execution
         freeArgs(shell_args, shell_argc);
