@@ -4,7 +4,8 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/types.h>
-#include <sys/wait.h>
+#include <fcntl.h> // O_ definitions
+// #include <sys/wait.h>
 #include "syscall.h"
 
 
@@ -18,7 +19,6 @@
 #define SHELL_TYPE_CLIENT 1
 #define SHELL_TYPE_SERVER 2
 
-
 // windows dev environment incomplete imports workaround
 #ifndef _SC_HOST_NAME_MAX 
 #define _SC_HOST_NAME_MAX 255
@@ -30,6 +30,10 @@
 
 #define PROMPT_DELIMITER '|'
 #define PROMPT_HOSTNAME_MAX _SC_HOST_NAME_MAX
+
+#define PARG_NTYPE_FINISHED 0
+#define PARG_NTYPE_SEMICOLON 1
+#define PARG_NTYPE_PIPE 2
 
 const char help[] = "\n\
 [seeHell]\n\
@@ -162,13 +166,15 @@ void changedir(char* arg) {
 
 // parse internal user input as arguments for external command execution
 // all parameters except the first are output
-char **parseArgs(char* input, int* _argc, char** _redir_in, char** _redir_out) {
+char **parseArgs(char* input, int* _argc, char** _redir_in, char** _redir_out, char* _next_type, char** _next_input) {
     char **args = NULL;
     char buffer[SHELL_USERINPUT_MAX];
     memset(buffer, '\0', sizeof(buffer));
     
     (*_redir_in) = NULL;
     (*_redir_out) = NULL;
+    (*_next_type) = PARG_NTYPE_FINISHED;
+    (*_next_input) = NULL;
     
     char *bp = NULL;
     char *ip = NULL;
@@ -178,17 +184,24 @@ char **parseArgs(char* input, int* _argc, char** _redir_in, char** _redir_out) {
     char escaped = 0;
     char commented = 0;
     char redirected = 0;
+    char nextarg = 0;
     char **redir;
     int count = 0;
 
     // count the number of arguments
     ip = input;
     ip--;
-    while((*++ip) != '\0' && !commented) {
+    while((*++ip) != '\0' && !commented && !nextarg) {
         switch(*ip) {
             case '\\':
                 if (!escaped) {
                     escaped = 1;
+                    continue;
+                }
+            case ';':
+            case '|':
+                if (!escaped) {
+                    nextarg = 1;
                     continue;
                 }
             case '<':
@@ -252,15 +265,34 @@ char **parseArgs(char* input, int* _argc, char** _redir_in, char** _redir_out) {
     escaped = 0;
     commented = 0;
     redirected = 0;
+    nextarg = 0;
     bp = buffer;
     ip = input;
     ap = args;
     ip--;
-    while((*++ip) != '\0' && !commented) {
+    while((*++ip) != '\0' && !commented && !nextarg) {
         switch(*ip) {
             case '\\':
                 if (!escaped) {
                     escaped = 1;
+                    continue;
+                }
+            case ';':
+                if (!escaped) {
+                    nextarg = 1;
+                    if ((*(ip + 1)) != '\0') {
+                        (*_next_type) = PARG_NTYPE_SEMICOLON;
+                        (*_next_input) = ip + 1;
+                    }
+                    continue;
+                }
+            case '|':
+                if (!escaped) {
+                    nextarg = 1;
+                    if ((*(ip + 1)) != '\0') {
+                        (*_next_type) = PARG_NTYPE_PIPE;
+                        (*_next_input) = ip + 1;
+                    }
                     continue;
                 }
             case '<':
@@ -366,8 +398,30 @@ void freeArgs(char **args, int argc, char *redir_in, char *redir_out) {
 }
 
 // handle child process behavior after successful forking
-void handleChild(char *const args[], int argc) {
+void handleChild(char *const args[], int argc, char *redir_in, char *redir_out) {
     if (argc == 0) return;
+
+    // open file-redirected input and output files each exists
+    // replace STDIN/STDOUT streams with these files
+    if (redir_in != NULL) {
+        int in_fd = open(redir_in, O_RDONLY);
+        if (in_fd < 0) {
+            perror("Failed to open input file.");
+            return;
+        }
+        if (dup2(in_fd, 0) == -1) fprintf(stderr, "STDIN Input dup2 failure.\n");
+        close(in_fd);
+    }
+    if (redir_out != NULL) {
+        int out_fd = open(redir_out, O_WRONLY | O_CREAT, 0644);
+        if (out_fd < 0) {
+            perror("Failed to open output file.");
+            return;
+        }
+        if (dup2(out_fd, 1) == -1) fprintf(stderr, "STDOUT Output dup2 failure.\n");
+        close(out_fd);
+    }
+
     // man 3 exec
     execvp(args[0], args); // takes the extern char **environ variable
     // if the execution fails (e.g. program doesnt exist), return will be used outside
@@ -429,40 +483,115 @@ int main(int argc, char* argv[]) {
         if (builtin) continue;
         // else    fprintf(stderr, "Unrecognized command.\n");
 
-        // todo splitArgs() into separate runs (additional while loop) by ';' character
-        
-        // argument preparation for program execution
-        int shell_argc = 0;
-        char *shell_redir_in, *shell_redir_out;
-        char **shell_args = parseArgs(uinput, &shell_argc, &shell_redir_in, &shell_redir_out);
-        if (shell_args == NULL) continue; // error parsing arguments, command can't be processed
-        // for (int i = 0; i < shell_argc; i++) printf("%s\n", shell_args[i]);
-        if (shell_redir_in != NULL) printf("< [%s]\n", shell_redir_in);
-        if (shell_redir_out != NULL) printf("> [%s]\n", shell_redir_out);
-        
-        // todo non-builtin commands are looked up as executables
-        // todo - split executable from arguments
-        // todo - check whether non ./ executable is in PATH and ./ is in pwd
-        // todo - if no executable found print to stderr
 
-        // program execution
-        pid_t pid;
-        int wstatus;
-        pid = fork(); // man 2 fork
-        switch(pid) {
-            case -1: perror("fork error"); break;
-            case 0: handleChild(shell_args, shell_argc); return ERR_EXECFAIL;
-            default:
-                // pid is set to child pid
-                // must wait for child to finish executing
-                // then resume interactive shell
-                wait(&wstatus); // man 2 wait
-                // printf("child [%d] exited with status [%d]\n", pid, wstatus);
+        // external command execution: handle each ';' and '|' delimited command
+        char shell_next_type = PARG_NTYPE_SEMICOLON; // default behavior for first run  as if next command after semicolon
+        char *shell_next_uinput = uinput; // give the full user input and move behind processed part on each execution
+        char waspipe = 0; // if the last run was piped as input, the next one has to receive pipe output
+        int fd_pipe_l[2] = {-1, -1};
+        int fd_pipe_r[2] = {-1, -1};
+        while(shell_next_type != PARG_NTYPE_FINISHED) {
+
+            // argument preparation for program execution
+            int shell_argc = 0;
+            char *shell_redir_in, *shell_redir_out;
+            char *shell_uinput = shell_next_uinput;
+            char **shell_args = parseArgs(shell_uinput, &shell_argc, &shell_redir_in, &shell_redir_out, &shell_next_type, &shell_next_uinput);
+            if (shell_args == NULL) continue; // error parsing arguments, command can't be processed
+            // for (int i = 0; i < shell_argc; i++) printf("%s\n", shell_args[i]);
+            if (shell_redir_in != NULL) printf("< [%s]\n", shell_redir_in);
+            if (shell_redir_out != NULL) printf("> [%s]\n", shell_redir_out);
+
+            // pipe preparation if pipe found on the left side of this command (right side of previous)
+            if (waspipe == 1) {
+                // Pipe was received during previous run to fd_pipe_l (which means it is already created)
+                waspipe = -1;
+            }
+            // pipe preparation if pipe found on the right side of this command
+            if (shell_next_type == PARG_NTYPE_PIPE) {
+                // Create a new pipe
+                printf("pipe tracing 1\n");
+                if (pipe(fd_pipe_r) != 0) perror("pipe error");
+                printf("pipe tracing 2\n");
+                waspipe = 1;
+            }
+
+            // program execution
+            pid_t pid;
+            int wstatus;
+            pid = fork(); // man 2 fork
+            char tmpbuffer[SHELL_USERINPUT_MAX];
+            memset(tmpbuffer, '\0', sizeof(tmpbuffer));
+            switch(pid) {
+                case -1: perror("fork error"); break;
+                case 0: 
+                    // After fork: Child process pipes and further handling incl. execution
+                    if (waspipe == -1) { // READING
+                        // Left-side pipe
+                        // Dup pipe to STDOUT for reading and close for writing
+                        printf("pipe tracing 7\n");
+                        // if (dup2(fd_pipe_l[0], STDOUT_FILENO) == -1) fprintf(stderr, "STDOUT Pipe dup2 failure.\n");
+                        // printf("pipe tracing 7.1\n");
+                        // close(fd_pipe_l[0]);
+                        // close(fd_pipe_l[1]);
+                        printf("pipe tracing 8\n");
+                    }
+                    if (shell_next_type == PARG_NTYPE_PIPE) { // WRITING
+                        // Right-side pipe
+                        // Dup pipe to STDIN for writing and close for reading
+                        printf("pipe tracing 3\n");
+                        if (dup2(fd_pipe_r[1], STDIN_FILENO) == -1) fprintf(stderr, "STDIN Pipe dup2 failure.\n");
+                        close(fd_pipe_r[1]);
+                        // read(fd_pipe_r[0], &tmpbuffer, sizeof(tmpbuffer));
+                        // printf("pipe tracing 3.1 read: [%s]\n", tmpbuffer);
+                        // close(fd_pipe_r[0]);
+                        printf("pipe tracing 4\n");
+                    }
+                    handleChild(shell_args, shell_argc, shell_redir_in, shell_redir_out); 
+                    return ERR_EXECFAIL;
+                default:
+                    // After fork: Parent process handling
+                    // pid is set to child pid
+                    // must wait for child to finish executing
+                    // then resume interactive shell
+                    // wait(&wstatus); // man 2 wait
+                    do {
+                        waitpid(pid, &wstatus, WUNTRACED);
+                    } while (!WIFEXITED(wstatus) && !WIFSIGNALED(wstatus));
+                    if (waspipe == -1) { // FINISHED USAGE
+                        // close left-side pipes for parent process (we're finished with them completely)
+                        printf("pipe tracing 9\n");
+                        // write(fd_pipe_l[0], "testing\0", 8);
+                        // read(fd_pipe_l[1], &tmpbuffer, sizeof(tmpbuffer));
+                        // printf("pipe tracing 5.1 read: [%s]\n", tmpbuffer);
+                        // close(fd_pipe_l[0]);
+                        // close(fd_pipe_l[1]);
+                        printf("pipe tracing 10\n");
+                        if (shell_next_type != PARG_NTYPE_PIPE) waspipe = 0;
+                    }
+                    if (shell_next_type == PARG_NTYPE_PIPE) { // MOVE FROM WRITING TO READING
+                        // move the pipes from right of the currently finished command
+                        // to the left of the upcoming command
+                        printf("pipe tracing 5\n");
+                        read(fd_pipe_l[1], &tmpbuffer, sizeof(tmpbuffer));
+                        printf("pipe tracing 5.1 read: [%s]\n", tmpbuffer);
+                        // fd_pipe_l[0] = fd_pipe_r[0];
+                        // fd_pipe_l[1] = fd_pipe_r[1];
+                        printf("pipe tracing 6\n");
+                    }
+                    // printf("child [%d] exited with status [%d]\n", pid, wstatus);
                 
-        }
+            }
 
-        // free arguments used in program execution
-        freeArgs(shell_args, shell_argc, shell_redir_in, shell_redir_out);        
+            // if (shell_next_type != PARG_NTYPE_FINISHED) {
+            //     printf("NEXT [%c]\n", (shell_next_type == PARG_NTYPE_SEMICOLON) ? ';' : '|');
+            //     printf("with [%s]\n", shell_next_uinput);
+            // }
+
+            // free arguments used in program execution
+            freeArgs(shell_args, shell_argc, shell_redir_in, shell_redir_out);   
+        }
+     
     };
 
     // free buffers
