@@ -52,11 +52,25 @@ const char help[] = "\n\
 \t-p <number>   Runs socketed on the given port number\n\
 \t-u <sockname> Runs socketed on the given AF_UNIX socket name\n\
 \t              If neither -p nor -u are specified, shell runs unsocketed\n\
+\t              Unless -c is specified, shell runs as a server\n\
 \t-c            Switches from server to client (with -p, -u specified)\n\
 \t-h            Displays help (this message)\n\
-- Commands:\n\
-\thalt          Halts the shell execution completely\n\
+- Built-in commands:\n\
+\thalt          Ends the shell execution\n\
+\tquit          Requests server to end the connection, then halt\n\
 \thelp          Displays help (this message)\n\
+\thistory       Prints history of commands up to 20\n\
+\tcd            Changes the working directory\n\
+- Built-in operators:\n\
+\t;             Ends the given command, can be followed by another\n\
+\t|             Pipes the STDOUT of previous command to STDIN of next\n\
+\t<             File input for the given command (precedence over pipe)\n\
+\t>             File output for the given command (precedence over pipe)\n\
+\t#             Rest of the input is handled (ignored) as a comment\n\
+\tspace         Trimmed if outside quotes and unescaped\n\
+\t\"             Quoted input is handled as a single argument\n\
+\t\\             Escape support for all built-in operators\n\
+- Any other commands are executed on OS level.\n\
 ";
 
 // man 3 exec
