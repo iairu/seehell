@@ -38,10 +38,10 @@ Internal user input argument parsing into array.
 | Character | Expected behavior | Implementation notes                             |
 | --------- | ----------------- | ------------------------------------------------ |
 | `#`       | comment           | rest of the input is ignored                     |
-| `;`       | next input        | NYI                                              |
-| `<`       |                   | NYI                                              |
-| `>`       |                   | NYI                                              |
-| `|`       | pipe              | NYI                                              |
+| `;`       | next input        |                                                  |
+| `<`       |                   |                                                  |
+| `>`       |                   |                                                  |
+| `|`       | pipe              |                                                  |
 | `\`       | escape            | literal treatment of `"`, space, `#`, others NYI |
 
 Additional processing behavior:

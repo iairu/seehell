@@ -17,6 +17,7 @@
 #define ERR_WRONGARG 3
 #define ERR_EXECFAIL 4
 #define ERR_SOCKET 5
+#define ERR_SERVER_PIPE 6
 
 #define SHELL_TYPE_LOCAL 0
 #define SHELL_TYPE_CLIENT 1
@@ -557,11 +558,8 @@ int main(int argc, char* argv[]) {
     char sock_path[] = "/dev/socket_seehell";   // todo
 
     // user input buffer and received message buffer (merged for now)
-    char *uinput = malloc(SHELL_USERINPUT_MAX * sizeof(char));
-    if (uinput == NULL) {
-        fprintf(stderr, "Memory allocation error (user input).\n");
-        return ERR_MALLOC;
-    }
+    char uinput[SHELL_USERINPUT_MAX];
+    memset(uinput, '\0', sizeof(uinput));
 
     if (shell_type == SHELL_TYPE_CLIENT || shell_type == SHELL_TYPE_SERVER) {
         printf("[Registering a socket]\n");
@@ -578,6 +576,11 @@ int main(int argc, char* argv[]) {
 
     if (shell_type == SHELL_TYPE_CLIENT) {
         printf("[Running as CLIENT]\n");
+
+        // show local prompt // todo retrieve from server
+        printPrompt();
+        char got_response = 1;
+
         if ((connect(s, (struct sockaddr*)&sock_addr, sizeof(sock_addr))) == -1) {
             // pripojenie na server
             perror("socket connect");
@@ -591,23 +594,31 @@ int main(int argc, char* argv[]) {
         FD_SET(s, &rs);
 
         while (select(s+1, &rs, NULL, NULL, NULL) > 0) {
-            if (FD_ISSET(0, &rs)) { // stdin
-                // todo current fgets... implementation goes here instead
+            if (got_response && FD_ISSET(0, &rs)) { // stdin
+                // user input
                 if (fgets(uinput, SHELL_USERINPUT_MAX, stdin) == NULL) return ERR_FGETS;
                 rewind(stdin);                        // remove any trailing STDIN
                 uinput[strcspn(uinput, "\n")] = '\0'; // remove trailing newline STDOUT
-                // pushHistory(history, uinput);         // add to history
-                // r = read(STDIN_FILENO, uinput, SHELL_USERINPUT_MAX); 
+                uinput[SHELL_USERINPUT_MAX - 1] = '\0'; // guarantee proper ending
+                // printf("[%s]\n", uinput);
+
                 write(s, uinput, strlen(uinput));
+                got_response = 0;
             }
             if (FD_ISSET(s, &rs)) { // server responded
+                memset(uinput, '\0', SHELL_USERINPUT_MAX);
                 r = read(s, uinput, SHELL_USERINPUT_MAX);
                 uinput[SHELL_USERINPUT_MAX - 1] = '\0';
-                printf("[server response]\n");
+                // printf("[server response]\n");
                 printf("%s\n", uinput);
-                printf("[server response end]\n");
+                // printf("[server response end]\n");
+                // allow user input again (response finished)
+                got_response = 1;
             }
-
+            if (got_response) {
+                // show local prompt // todo retrieve from server
+                printPrompt();
+            }
             // connect() mnoziny meni, takze ich treba znova nastavit
             FD_ZERO(&rs);
             FD_SET(0, &rs);
@@ -636,8 +647,27 @@ int main(int argc, char* argv[]) {
             return ERR_SOCKET;
         } 
 
+        // save stdout as a new stream (used for direct printing)
+        int sstdout = dup(STDOUT_FILENO);
+        // pipe server's stdout so it won't get printed directly and can be sent as a buffer
+        int fd_pipe_server[2] = {-1, -1};
+        if(pipe(fd_pipe_server) != 0 ) {
+            perror("Internal server pipe error");
+            return ERR_SERVER_PIPE;
+        }
+        dup2(fd_pipe_server[PIPE_WRITE], STDOUT_FILENO);
+        close(fd_pipe_server[PIPE_WRITE]);
+
+        // allow non-blocking read on empty pipe
+        // https://stackoverflow.com/questions/955962/how-to-buffer-stdout-in-memory-and-write-it-from-a-dedicated-thread#comment5333474_956269
+        long flags = fcntl(fd_pipe_server[PIPE_READ], F_GETFL);
+        flags |= O_NONBLOCK;
+        fcntl(fd_pipe_server[PIPE_READ], F_SETFL, flags);
+        
+        // use fd_pipe_server[PIPE_READ] below to retreive data to buffer
+
         // server loop
-        printf("Listening...\n");
+        dprintf(sstdout, "Listening...\n");
         while (1 == 1) {
             // prijat jedno spojenie (z max 5 cakajucich)
             if ((ds = accept(s, NULL, NULL)) == -1) {
@@ -645,23 +675,38 @@ int main(int argc, char* argv[]) {
                 return ERR_SOCKET;
             }
 
-            // (sizeof(uinput) - 1) because last char reserved for '\0'
-            while ((r = read(ds, &uinput, SHELL_USERINPUT_MAX)) > 0) {
+            // last char reserved for '\0'
+            while ((r = read(ds, &uinput, SHELL_USERINPUT_MAX - 1)) > 0) {
                 // guarantee proper ending
-                if (r >= SHELL_USERINPUT_MAX)
-                    uinput[SHELL_USERINPUT_MAX - 1] = '\0';
-                else 
-                    uinput[r] = '\0';
+                uinput[r] = '\0';
 
                 // request handling
-                printf(">> client: %s\n", uinput);
+                dprintf(sstdout, ">> client: %s\n", uinput);
 
                 // server action
-                int i;
-                for (i=0; i<r; i++) uinput[i] = toupper(uinput[i]);
+                // int i;
+                // for (i=0; i<r; i++) uinput[i] = toupper(uinput[i]);
+
+                // built-in command execution
+                // _todo argument parsing for built-ins (no use-case found for now)
+                // char builtin = 1;
+                if      (strcmp(uinput, "halt") == 0) break; // break out of the interactive shell
+                else if (strcmp(uinput, "quit") == 0) break; // todo quit connection (client sends quit to server,
+                // todo server closes connection on socket, client realizes the connection is closed as planned and halts)
+                else if (strlen(uinput) >= 3 && strncmp(uinput, "cd ", 3) == 0) changedir(uinput + 3); // cd to arg
+                else if (strcmp(uinput, "cd") == 0) changedir(NULL); // cd to home on no args
+                else if (strcmp(uinput, "help") == 0) printf("%s\n", help); // print help
+                // else    builtin = 0;
+                else    printf("nyi\n");
+                // if (builtin) continue;
 
                 // response handling
-                printf(">> server: %s\n", uinput);
+                fflush(stdout);
+                memset(uinput, '\0', SHELL_USERINPUT_MAX);
+                // putchar('\0');
+                read(fd_pipe_server[PIPE_READ], uinput, SHELL_USERINPUT_MAX - 1); // piped stdout to buffer
+                uinput[SHELL_USERINPUT_MAX - 1] = '\0';
+                // dprintf(sstdout, ">> server sent buffered response");
                 if (write(ds, uinput, strlen(uinput)) == -1) {
                     perror("data socket write");
                     return ERR_SOCKET;
@@ -703,7 +748,6 @@ int main(int argc, char* argv[]) {
             else if (strcmp(uinput, "history") == 0) printHistory(history); // print history
             else    builtin = 0;
             if (builtin) continue;
-            // else    fprintf(stderr, "Unrecognized command.\n");
 
 
             // external command execution: handle each ';' and '|' delimited command
@@ -796,10 +840,6 @@ int main(int argc, char* argv[]) {
         freeHistory(history);
         // printf("freed history\n");
     }
-
-    // free buffers
-    free(uinput);
-    // printf("freed uinput\n");
 
     return 0;
 }
