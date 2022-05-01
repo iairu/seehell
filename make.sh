@@ -1,4 +1,7 @@
 #!/bin/bash
+echo "####################################"
+echo "####################################"
+echo "####################################"
 # # doesn't save debugging symbols even though it has been told to
 # gcc -Wall -g -m32 -s -nostdlib syscall.S syscall.c -o syscall.out
 #
@@ -25,3 +28,6 @@ gcc -Wall obj/main.c.o obj/syscall.S.o -o build/main
 # layout split          # show C and ASM code alongside
 # b c_line_number_here  # set a breakpoint
 # run                   # start the process
+echo "####################################"
+echo "####################################"
+echo "####################################"
