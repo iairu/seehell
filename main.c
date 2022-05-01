@@ -27,6 +27,7 @@
 // configurables
 #define SHELL_SOCKNAME_MAX 255
 #define SHELL_USERINPUT_MAX 4096
+#define SHELL_HISTORY_MAX 20
 
 #define PROMPT_DELIMITER '|'
 #define PROMPT_HOSTNAME_MAX _SC_HOST_NAME_MAX
@@ -405,9 +406,12 @@ char **parseArgs(char* input, int* _argc, char** _redir_in, char** _redir_out, c
 // free arguments retreived from parseArgs
 void freeArgs(char **args, int argc, char *redir_in, char *redir_out) {
     int i;
-    for(i = 0; i < argc + 1; i++) // incl. NULL-terminated pointer at the end
+    for(i = 0; i <= argc; i++) { // incl. NULL-terminated pointer at the end 
         free(args[i]);
+        // printf("(freed arg %d)\n", i);
+    }
     free(args);
+    // printf("(freed args)\n");
     if (redir_in != NULL) free(redir_in);
     if (redir_out != NULL) free(redir_out);
         
@@ -474,6 +478,95 @@ void handleChild(char *const args[], int argc,
     } 
 }
 
+char **allocHistory() {
+    int i;
+    char **history = malloc(SHELL_HISTORY_MAX * sizeof(char *));
+    if (history == NULL) {
+        fprintf(stderr, "Memory allocation error (history).\n");
+        return NULL;
+    }
+    for (i = 0; i < SHELL_HISTORY_MAX; i++) {
+        history[i] = malloc(SHELL_USERINPUT_MAX * sizeof(char));
+        if (history[i] == NULL) {
+            fprintf(stderr, "Memory allocation error (history).\n");
+            return NULL;
+        }
+    }
+    return history;
+}
+
+void pushHistory(char **history, const char *uinput) {
+    int i;
+    char *moved = history[SHELL_HISTORY_MAX - 1];
+    for (i = SHELL_HISTORY_MAX - 1; i > 0; i--)
+        history[i] = history[i - 1];
+    history[0] = moved;
+    strcpy(history[0], uinput);
+}
+
+void freeHistory(char **history) {
+    freeArgs(history, SHELL_HISTORY_MAX - 1, NULL, NULL);
+}
+
+char *fgetskb(char *buffer, int bufsize, FILE *stream) {
+    char c;
+    int i = 0;
+    while (i < bufsize - 1) { // if the first value is esc
+        c = getc(stream);
+        if (c == EOF) {
+            return NULL;
+        } else if (c == 27 || c == '^') {
+            if (c == '^') {
+                // my shell behavior
+                if ((c = getc(stream)) != '[') {
+                    ungetc(c, stream);
+                    buffer[i++] = '^';
+                    continue;
+                }
+                if ((c = getc(stream)) != '[') {
+                    ungetc(c, stream);
+                    ungetc('[', stream);
+                    buffer[i++] = '^';
+                    continue;
+                }
+            } else if (c == 27) {
+                // skip the [ from https://stackoverflow.com/a/11432632
+                if ((c = getc(stream)) != '[') {
+                    ungetc(c, stream);
+                    buffer[i++] = 27;
+                    continue;
+                }
+            }
+            i = 0;
+            getc(stream); // skip the [ from https://stackoverflow.com/a/11432632
+            switch(getc(stream)) { // the real value
+                case 'A':
+                    // code for arrow up
+                    printf("up\n");
+                    break;
+                case 'B':
+                    // code for arrow down
+                    printf("down\n");
+                    break;
+                case 'C':
+                    // code for arrow right
+                    printf("right\n");
+                    break;
+                case 'D':
+                    // code for arrow left
+                    printf("left\n");
+                    break;
+            }
+        } else if (c == '\n' || c == '\r') {
+            break;
+        } else {
+            buffer[i++] = c;
+        }
+    }
+    buffer[i++] = '\n';
+    buffer[i] = '\0';
+    return buffer;
+}
 
 // --------------------------------------
 // --------------------------------------
@@ -502,9 +595,13 @@ int main(int argc, char* argv[]) {
     // user input buffer
     char *uinput = malloc(SHELL_USERINPUT_MAX * sizeof(char));
     if (uinput == NULL) {
-        fprintf(stderr, "Memory allocation error.\n");
+        fprintf(stderr, "Memory allocation error (user input).\n");
         return ERR_MALLOC;
     }
+
+    // command history buffers
+    char **history = allocHistory();
+    if (history == NULL) return ERR_MALLOC;
 
     // interactive shell until "halt" encountered
     while (1 == 1) {
@@ -512,9 +609,11 @@ int main(int argc, char* argv[]) {
         printPrompt();
         
         // user input
-        if (fgets(uinput, SHELL_USERINPUT_MAX, stdin) == NULL) return ERR_FGETS;
+        rewind(stdin);
+        if (fgetskb(uinput, SHELL_USERINPUT_MAX, stdin) == NULL) return ERR_FGETS;
         rewind(stdin);                        // remove any trailing STDIN
         uinput[strcspn(uinput, "\n")] = '\0'; // remove trailing newline STDOUT
+        pushHistory(history, uinput);         // add to history
         // printf("[%s]\n", uinput);
 
         // built-in command execution
@@ -546,7 +645,7 @@ int main(int argc, char* argv[]) {
             char **shell_args = parseArgs(shell_uinput, &shell_argc, &shell_redir_in, &shell_redir_out, &shell_next_type, &shell_next_uinput);
             if (shell_args == NULL) continue; // error parsing arguments, command can't be processed
             
-            // for (int i = 0; i < shell_argc; i++) printf("%s\n", shell_args[i]);
+            // for (i = 0; i < shell_argc; i++) printf("%s\n", shell_args[i]);
             // if (shell_redir_in != NULL) printf("< [%s]\n", shell_redir_in);
             // if (shell_redir_out != NULL) printf("> [%s]\n", shell_redir_out);
 
@@ -614,12 +713,16 @@ int main(int argc, char* argv[]) {
 
             // free arguments used in program execution
             freeArgs(shell_args, shell_argc, shell_redir_in, shell_redir_out);   
+            // printf("freed shell_...\n");
         }
      
     };
 
     // free buffers
     free(uinput);
+    // printf("freed uinput\n");
+    freeHistory(history);
+    // printf("freed history\n");
 
     return 0;
 }
