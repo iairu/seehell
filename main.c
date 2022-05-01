@@ -517,65 +517,8 @@ void freeHistory(char **history) {
     freeArgs(history, SHELL_HISTORY_MAX - 1, NULL, NULL);
 }
 
-char *fgetskb(char *buffer, int bufsize, FILE *stream) {
-    char c;
-    int i = 0;
-    while (i < bufsize - 1) { // if the first value is esc
-        c = getc(stream);
-        if (c == EOF) {
-            return NULL;
-        } else if (c == 27 || c == '^') {
-            if (c == '^') {
-                // my shell behavior
-                if ((c = getc(stream)) != '[') {
-                    ungetc(c, stream);
-                    buffer[i++] = '^';
-                    continue;
-                }
-                if ((c = getc(stream)) != '[') {
-                    ungetc(c, stream);
-                    ungetc('[', stream);
-                    buffer[i++] = '^';
-                    continue;
-                }
-            } else if (c == 27) {
-                // skip the [ from https://stackoverflow.com/a/11432632
-                if ((c = getc(stream)) != '[') {
-                    ungetc(c, stream);
-                    buffer[i++] = 27;
-                    continue;
-                }
-            }
-            i = 0;
-            getc(stream); // skip the [ from https://stackoverflow.com/a/11432632
-            switch(getc(stream)) { // the real value
-                case 'A':
-                    // code for arrow up
-                    printf("up\n");
-                    break;
-                case 'B':
-                    // code for arrow down
-                    printf("down\n");
-                    break;
-                case 'C':
-                    // code for arrow right
-                    printf("right\n");
-                    break;
-                case 'D':
-                    // code for arrow left
-                    printf("left\n");
-                    break;
-            }
-        } else if (c == '\n' || c == '\r') {
-            break;
-        } else {
-            buffer[i++] = c;
-        }
-    }
-    buffer[i++] = '\n';
-    buffer[i] = '\0';
-    return buffer;
-}
+// unfinished implementation of arrow navigation for history (see older commits)
+// char *fgetskb(char *buffer, int bufsize, FILE *stream);
 
 // --------------------------------------
 // --------------------------------------
@@ -619,7 +562,7 @@ int main(int argc, char* argv[]) {
         
         // user input
         rewind(stdin);
-        if (fgetskb(uinput, SHELL_USERINPUT_MAX, stdin) == NULL) return ERR_FGETS;
+        if (fgets(uinput, SHELL_USERINPUT_MAX, stdin) == NULL) return ERR_FGETS;
         rewind(stdin);                        // remove any trailing STDIN
         uinput[strcspn(uinput, "\n")] = '\0'; // remove trailing newline STDOUT
         pushHistory(history, uinput);         // add to history
