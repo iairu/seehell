@@ -504,6 +504,15 @@ void pushHistory(char **history, const char *uinput) {
     strcpy(history[0], uinput);
 }
 
+void printHistory(char **history) {
+    int i;
+    int j = 0;
+    for (i = SHELL_HISTORY_MAX - 1; i >= 0; i--) {
+        if (history[i][0] == '\0') continue;
+        printf("  %d\t%s\n", ++j, history[i]);
+    }
+}
+
 void freeHistory(char **history) {
     freeArgs(history, SHELL_HISTORY_MAX - 1, NULL, NULL);
 }
@@ -625,6 +634,7 @@ int main(int argc, char* argv[]) {
         else if (strlen(uinput) >= 3 && strncmp(uinput, "cd ", 3) == 0) changedir(uinput + 3); // cd to arg
         else if (strcmp(uinput, "cd") == 0) changedir(NULL); // cd to home on no args
         else if (strcmp(uinput, "help") == 0) printf("%s\n", help); // print help
+        else if (strcmp(uinput, "history") == 0) printHistory(history); // print history
         else    builtin = 0;
         if (builtin) continue;
         // else    fprintf(stderr, "Unrecognized command.\n");
