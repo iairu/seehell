@@ -424,6 +424,7 @@ void handleChild(char *const args[], int argc,
 
     // open file-redirected input and output files each exists
     // replace STDIN/STDOUT streams with these files
+    // otherwise if PIPES found, replace STDIN/STDOUT streams with PIPE_READ/PIPE_WRITE
     if (redir_in != NULL) {
         int in_fd = open(redir_in, O_RDONLY);
         if (in_fd < 0) {
@@ -435,7 +436,15 @@ void handleChild(char *const args[], int argc,
             return;
         }
         close(in_fd);
+    } else if (is_pipe == IS_PIPE_LEFT || is_pipe == IS_PIPE_BOTH) { // only read from left
+        close((*pipe_left_write)); (*pipe_left_write) = -1;
+        if (dup2((*pipe_left_read), STDIN_FILENO) == -1) {
+            perror("Failed to redirect STDIN to the read end of the left pipe");
+            return;
+        }
+        close((*pipe_left_read)); (*pipe_left_read) = -1;
     }
+
     if (redir_out != NULL) {
         int out_fd = open(redir_out, O_WRONLY | O_CREAT, 0644);
         if (out_fd < 0) {
@@ -447,18 +456,7 @@ void handleChild(char *const args[], int argc,
             return;
         }
         close(out_fd);
-    }
-
-    // replace STDIN/STDOUT streams with PIPE_READ/PIPE_WRITE
-    if (is_pipe == IS_PIPE_LEFT || is_pipe == IS_PIPE_BOTH) { // only read from left
-        close((*pipe_left_write)); (*pipe_left_write) = -1;
-        if (dup2((*pipe_left_read), STDIN_FILENO) == -1) {
-            perror("Failed to redirect STDIN to the read end of the left pipe");
-            return;
-        }
-        close((*pipe_left_read)); (*pipe_left_read) = -1;
-    }
-    if (is_pipe == IS_PIPE_RIGHT || is_pipe == IS_PIPE_BOTH) { // only write to right
+    } else if (is_pipe == IS_PIPE_RIGHT || is_pipe == IS_PIPE_BOTH) { // only write to right
         close((*pipe_right_read)); (*pipe_right_read) = -1;
         if (dup2((*pipe_right_write), STDOUT_FILENO) == -1) {
             perror("Failed to redirect STDOUT to the write end of the right pipe");
@@ -466,6 +464,8 @@ void handleChild(char *const args[], int argc,
         }
         close((*pipe_right_write)); (*pipe_right_write) = -1;
     }
+
+    
 
     // man 3 exec
     if (execvp(args[0], args) == -1) { // execvp takes the extern char **environ variable
