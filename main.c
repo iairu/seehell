@@ -6,14 +6,17 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <fcntl.h> // O_ definitions
+#include <sys/socket.h>
+#include <sys/un.h>       
+#include <errno.h>
 #include "syscall.h"
-
 
 // enums
 #define ERR_MALLOC 1
 #define ERR_FGETS 2
 #define ERR_WRONGARG 3
 #define ERR_EXECFAIL 4
+#define ERR_SOCKET 5
 
 #define SHELL_TYPE_LOCAL 0
 #define SHELL_TYPE_CLIENT 1
@@ -538,158 +541,265 @@ void freeHistory(char **history) {
 // --------------------------------------
 // --------------------------------------
 // --------------------------------------
-
 int main(int argc, char* argv[]) {
     // argument handling
     char shell_type = SHELL_TYPE_LOCAL;
-    int shell_port = 0;
-    char shell_sockname[SHELL_SOCKNAME_MAX];
+    int shell_port = 0; // todo
+    char shell_sockname[SHELL_SOCKNAME_MAX]; // todo
     memset(shell_sockname, '\0', sizeof(shell_sockname));
     if (processArgs(argc, argv, &shell_type, &shell_port, shell_sockname, sizeof(shell_sockname))) return ERR_WRONGARG;
 
-    // socket preparation
-    // todo if server && port: port availability check
-    // todo if server && socket name: socket name availability check
+    // socket related
+    int s, r;                                   // client + server
+    int ds;                                     // server only
+    fd_set rs;	                                // client deskriptory pre select()
+    struct sockaddr_un sock_addr;		        // adresa pre soket
+    char sock_path[] = "/dev/socket_seehell";   // todo
 
-    // inform the user
-    printf("Welcome to seeHell, running as a [%s].\n\n", 
-        (shell_type == SHELL_TYPE_LOCAL) ? "local self" :
-        (shell_type == SHELL_TYPE_CLIENT) ? "local unix client" :
-        (shell_type == SHELL_TYPE_SERVER) ? "local unix server" : "???"
-        );
-
-    // user input buffer
+    // user input buffer and received message buffer (merged for now)
     char *uinput = malloc(SHELL_USERINPUT_MAX * sizeof(char));
     if (uinput == NULL) {
         fprintf(stderr, "Memory allocation error (user input).\n");
         return ERR_MALLOC;
     }
 
-    // command history buffers
-    char **history = allocHistory();
-    if (history == NULL) return ERR_MALLOC;
+    if (shell_type == SHELL_TYPE_CLIENT || shell_type == SHELL_TYPE_SERVER) {
+        printf("[Registering a socket]\n");
+        memset(&sock_addr, 0, sizeof(sock_addr));
+        sock_addr.sun_family = AF_LOCAL;
+        strcpy(sock_addr.sun_path, sock_path);	    // adresa = meno soketu (rovnake ako pouziva klient)
 
-    // interactive shell until "halt" encountered
-    while (1 == 1) {
-        // show prompt
-        printPrompt();
+        if ((s = socket(PF_LOCAL, SOCK_STREAM, 0)) == -1) {
+            // vytvorenie socketu
+            perror("socket");
+            return ERR_SOCKET;
+        }
+    }
+
+    if (shell_type == SHELL_TYPE_CLIENT) {
+        printf("[Running as CLIENT]\n");
+        if ((connect(s, (struct sockaddr*)&sock_addr, sizeof(sock_addr))) == -1) {
+            // pripojenie na server
+            perror("socket connect");
+            return ERR_SOCKET;
+        }
+
+        // toto umoznuje klientovi cakat na vstup z terminalu (stdin) alebo zo soketu
+        // co je prave pripravene, to sa obsluzi (nezalezi na poradi v akom to pride)
+        FD_ZERO(&rs);
+        FD_SET(0, &rs);
+        FD_SET(s, &rs);
+
+        while (select(s+1, &rs, NULL, NULL, NULL) > 0) {
+            if (FD_ISSET(0, &rs)) { // stdin
+                // todo current fgets... implementation goes here instead
+                if (fgets(uinput, SHELL_USERINPUT_MAX, stdin) == NULL) return ERR_FGETS;
+                rewind(stdin);                        // remove any trailing STDIN
+                uinput[strcspn(uinput, "\n")] = '\0'; // remove trailing newline STDOUT
+                // pushHistory(history, uinput);         // add to history
+                // r = read(STDIN_FILENO, uinput, SHELL_USERINPUT_MAX); 
+                write(s, uinput, strlen(uinput));
+            }
+            if (FD_ISSET(s, &rs)) { // server responded
+                r = read(s, uinput, SHELL_USERINPUT_MAX);
+                uinput[SHELL_USERINPUT_MAX - 1] = '\0';
+                printf("[server response]\n");
+                printf("%s\n", uinput);
+                printf("[server response end]\n");
+            }
+
+            // connect() mnoziny meni, takze ich treba znova nastavit
+            FD_ZERO(&rs);
+            FD_SET(0, &rs);
+            FD_SET(s, &rs);
+        }
+        perror("select");	// ak server skonci, nemusi ist o chybu
+        close(s);
+    } else if (shell_type == SHELL_TYPE_SERVER) {
+        printf("[Running as SERVER]\n");
+        if (unlink(sock_path) == -1) { 
+            // ak by tam uz taky bol tak sa vyhodi
+            if (errno != ENOENT) { // not found error can be ignored
+                perror("socket unlink"); 
+                return ERR_SOCKET;
+            }
+        }		
+        if (bind(s, (struct sockaddr*)&sock_addr, sizeof(sock_addr)) == -1) {	
+            // zviazat soket s lokalnou adresou
+            perror("socket bind");
+            return ERR_SOCKET;
+        }
+        if (listen(s, 5) == -1) { 
+            // s je hlavny soket, len pocuva
+            // pocuvat, najviac 5 spojeni naraz (v rade)
+            perror("socket listen");
+            return ERR_SOCKET;
+        } 
+
+        // server loop
+        printf("Listening...\n");
+        while (1 == 1) {
+            // prijat jedno spojenie (z max 5 cakajucich)
+            if ((ds = accept(s, NULL, NULL)) == -1) {
+                perror("data socket");
+                return ERR_SOCKET;
+            }
+
+            // (sizeof(uinput) - 1) because last char reserved for '\0'
+            while ((r = read(ds, &uinput, SHELL_USERINPUT_MAX)) > 0) {
+                // guarantee proper ending
+                if (r >= SHELL_USERINPUT_MAX)
+                    uinput[SHELL_USERINPUT_MAX - 1] = '\0';
+                else 
+                    uinput[r] = '\0';
+
+                // request handling
+                printf(">> client: %s\n", uinput);
+
+                // server action
+                int i;
+                for (i=0; i<r; i++) uinput[i] = toupper(uinput[i]);
+
+                // response handling
+                printf(">> server: %s\n", uinput);
+                if (write(ds, uinput, strlen(uinput)) == -1) {
+                    perror("data socket write");
+                    return ERR_SOCKET;
+                }
+            }
+            perror("data socket read");
+            close(ds);
+        }
+        close(s);
+    } else if (shell_type == SHELL_TYPE_LOCAL) {
+        printf("[Running as LOCAL]\n");
         
-        // user input
-        rewind(stdin);
-        if (fgets(uinput, SHELL_USERINPUT_MAX, stdin) == NULL) return ERR_FGETS;
-        rewind(stdin);                        // remove any trailing STDIN
-        uinput[strcspn(uinput, "\n")] = '\0'; // remove trailing newline STDOUT
-        pushHistory(history, uinput);         // add to history
-        // printf("[%s]\n", uinput);
+        // command history buffers
+        char **history = allocHistory();
+        if (history == NULL) return ERR_MALLOC;
 
-        // built-in command execution
-        // _todo argument parsing for built-ins (no use-case found for now)
-        char builtin = 1;
-        if      (strcmp(uinput, "halt") == 0) break; // break out of the interactive shell
-        else if (strcmp(uinput, "quit") == 0) break; // todo quit connection (client sends quit to server,
-        // todo server closes connection on socket, client realizes the connection is closed as planned and halts)
-        else if (strlen(uinput) >= 3 && strncmp(uinput, "cd ", 3) == 0) changedir(uinput + 3); // cd to arg
-        else if (strcmp(uinput, "cd") == 0) changedir(NULL); // cd to home on no args
-        else if (strcmp(uinput, "help") == 0) printf("%s\n", help); // print help
-        else if (strcmp(uinput, "history") == 0) printHistory(history); // print history
-        else    builtin = 0;
-        if (builtin) continue;
-        // else    fprintf(stderr, "Unrecognized command.\n");
+        // interactive shell until "halt" encountered
+        while (1 == 1) {
+            // show local prompt
+            printPrompt();
+        
+            // user input
+            if (fgets(uinput, SHELL_USERINPUT_MAX, stdin) == NULL) return ERR_FGETS;
+            rewind(stdin);                        // remove any trailing STDIN
+            uinput[strcspn(uinput, "\n")] = '\0'; // remove trailing newline STDOUT
+            uinput[SHELL_USERINPUT_MAX - 1] = '\0'; // guarantee proper ending
+            pushHistory(history, uinput);         // add to history
+            // printf("[%s]\n", uinput);
+
+            // built-in command execution
+            // _todo argument parsing for built-ins (no use-case found for now)
+            char builtin = 1;
+            if      (strcmp(uinput, "halt") == 0) break; // break out of the interactive shell
+            else if (strcmp(uinput, "quit") == 0) break; // todo quit connection (client sends quit to server,
+            // todo server closes connection on socket, client realizes the connection is closed as planned and halts)
+            else if (strlen(uinput) >= 3 && strncmp(uinput, "cd ", 3) == 0) changedir(uinput + 3); // cd to arg
+            else if (strcmp(uinput, "cd") == 0) changedir(NULL); // cd to home on no args
+            else if (strcmp(uinput, "help") == 0) printf("%s\n", help); // print help
+            else if (strcmp(uinput, "history") == 0) printHistory(history); // print history
+            else    builtin = 0;
+            if (builtin) continue;
+            // else    fprintf(stderr, "Unrecognized command.\n");
 
 
-        // external command execution: handle each ';' and '|' delimited command
-        char shell_next_type = PARG_NTYPE_SEMICOLON; // default behavior for first run  as if next command after semicolon
-        char *shell_next_uinput = uinput; // give the full user input and move behind processed part on each execution
-        char is_pipe = IS_PIPE_NONE; // if the last run was piped as input, the next one has to receive pipe output
-        int fd_pipe_l[2] = {-1, -1}; // {read, write} pair
-        int fd_pipe_r[2] = {-1, -1}; // {read, write} pair
-        while(shell_next_type != PARG_NTYPE_FINISHED) {
+            // external command execution: handle each ';' and '|' delimited command
+            char shell_next_type = PARG_NTYPE_SEMICOLON; // default behavior for first run  as if next command after semicolon
+            char *shell_next_uinput = uinput; // give the full user input and move behind processed part on each execution
+            char is_pipe = IS_PIPE_NONE; // if the last run was piped as input, the next one has to receive pipe output
+            int fd_pipe_l[2] = {-1, -1}; // {read, write} pair
+            int fd_pipe_r[2] = {-1, -1}; // {read, write} pair
+            while(shell_next_type != PARG_NTYPE_FINISHED) {
 
-            // argument preparation for program execution
-            int shell_argc = 0;
-            char *shell_redir_in, *shell_redir_out;
-            char *shell_uinput = shell_next_uinput;
-            char **shell_args = parseArgs(shell_uinput, &shell_argc, &shell_redir_in, &shell_redir_out, &shell_next_type, &shell_next_uinput);
-            if (shell_args == NULL) continue; // error parsing arguments, command can't be processed
+                // argument preparation for program execution
+                int shell_argc = 0;
+                char *shell_redir_in, *shell_redir_out;
+                char *shell_uinput = shell_next_uinput;
+                char **shell_args = parseArgs(shell_uinput, &shell_argc, &shell_redir_in, &shell_redir_out, &shell_next_type, &shell_next_uinput);
+                if (shell_args == NULL) continue; // error parsing arguments, command can't be processed
             
-            // for (i = 0; i < shell_argc; i++) printf("%s\n", shell_args[i]);
-            // if (shell_redir_in != NULL) printf("< [%s]\n", shell_redir_in);
-            // if (shell_redir_out != NULL) printf("> [%s]\n", shell_redir_out);
+                // for (i = 0; i < shell_argc; i++) printf("%s\n", shell_args[i]);
+                // if (shell_redir_in != NULL) printf("< [%s]\n", shell_redir_in);
+                // if (shell_redir_out != NULL) printf("> [%s]\n", shell_redir_out);
 
-            // pipe preparation if pipe found on the right side of this command
-            if (shell_next_type == PARG_NTYPE_PIPE) {
-                // Create a new pipe
-                if (pipe(fd_pipe_r) != 0) {
-                    perror("Pipe error");
+                // pipe preparation if pipe found on the right side of this command
+                if (shell_next_type == PARG_NTYPE_PIPE) {
+                    // Create a new pipe
+                    if (pipe(fd_pipe_r) != 0) {
+                        perror("Pipe error");
+                        freeArgs(shell_args, shell_argc, shell_redir_in, shell_redir_out); 
+                        break;
+                    }
+                    // There may be either the new pipe on right or an already existing one on left + the new one
+                    is_pipe = (is_pipe == IS_PIPE_LEFT) ? IS_PIPE_BOTH : IS_PIPE_RIGHT;
+                }
+
+                // printf("pipes before fork: left[read %d, write %d] right[read %d, write %d]\n", 
+                //         fd_pipe_l[PIPE_READ], fd_pipe_r[PIPE_WRITE], fd_pipe_r[PIPE_READ], fd_pipe_r[PIPE_WRITE]);
+
+                // fork execution
+                pid_t pid;
+                int wstatus;
+                pid = fork(); // man 2 fork
+                if (pid == -1) {
+                    perror("Fork error"); 
                     freeArgs(shell_args, shell_argc, shell_redir_in, shell_redir_out); 
                     break;
-                }
-                // There may be either the new pipe on right or an already existing one on left + the new one
-                is_pipe = (is_pipe == IS_PIPE_LEFT) ? IS_PIPE_BOTH : IS_PIPE_RIGHT;
-            }
+                } else if (pid == 0) {
+                    // child process
 
-            // printf("pipes before fork: left[read %d, write %d] right[read %d, write %d]\n", 
-            //         fd_pipe_l[PIPE_READ], fd_pipe_r[PIPE_WRITE], fd_pipe_r[PIPE_READ], fd_pipe_r[PIPE_WRITE]);
+                    handleChild(shell_args, shell_argc, shell_redir_in, shell_redir_out, is_pipe, 
+                                &(fd_pipe_l[PIPE_READ]), &(fd_pipe_l[PIPE_WRITE]),
+                                &(fd_pipe_r[PIPE_READ]), &(fd_pipe_r[PIPE_WRITE])); 
+                    return ERR_EXECFAIL;
 
-            // fork execution
-            pid_t pid;
-            int wstatus;
-            pid = fork(); // man 2 fork
-            if (pid == -1) {
-                perror("Fork error"); 
-                freeArgs(shell_args, shell_argc, shell_redir_in, shell_redir_out); 
-                break;
-            } else if (pid == 0) {
-                // child process
+                } else {
+                    // parent process
+                    // pid is set to child pid
 
-                handleChild(shell_args, shell_argc, shell_redir_in, shell_redir_out, is_pipe, 
-                            &(fd_pipe_l[PIPE_READ]), &(fd_pipe_l[PIPE_WRITE]),
-                            &(fd_pipe_r[PIPE_READ]), &(fd_pipe_r[PIPE_WRITE])); 
-                return ERR_EXECFAIL;
-
-            } else {
-                // parent process
-                // pid is set to child pid
-
-                if (is_pipe == IS_PIPE_LEFT || is_pipe == IS_PIPE_BOTH) {
-                    // close left-side pipes for parent process
-                    close(fd_pipe_l[PIPE_READ]); fd_pipe_l[PIPE_READ] = -1;
-                    close(fd_pipe_l[PIPE_WRITE]); fd_pipe_l[PIPE_WRITE] = -1;
-                    is_pipe = (is_pipe == IS_PIPE_BOTH) ? IS_PIPE_RIGHT : IS_PIPE_NONE;
-                }
+                    if (is_pipe == IS_PIPE_LEFT || is_pipe == IS_PIPE_BOTH) {
+                        // close left-side pipes for parent process
+                        close(fd_pipe_l[PIPE_READ]); fd_pipe_l[PIPE_READ] = -1;
+                        close(fd_pipe_l[PIPE_WRITE]); fd_pipe_l[PIPE_WRITE] = -1;
+                        is_pipe = (is_pipe == IS_PIPE_BOTH) ? IS_PIPE_RIGHT : IS_PIPE_NONE;
+                    }
                 
-                // must wait for child to finish executing
-                // then resume interactive shell
-                do {
-                    // wait(&wstatus); // man 2 wait
-                    waitpid(pid, &wstatus, WUNTRACED);
-                } while (!WIFEXITED(wstatus) && !WIFSIGNALED(wstatus));
-                // printf("child [%d] exited with status [%d]\n", pid, wstatus);
+                    // must wait for child to finish executing
+                    // then resume interactive shell
+                    do {
+                        // wait(&wstatus); // man 2 wait
+                        waitpid(pid, &wstatus, WUNTRACED);
+                    } while (!WIFEXITED(wstatus) && !WIFSIGNALED(wstatus));
+                    // printf("child [%d] exited with status [%d]\n", pid, wstatus);
 
-                if (is_pipe == IS_PIPE_RIGHT) { // move the pipe for next command from right to left
-                    fd_pipe_l[PIPE_READ] = fd_pipe_r[PIPE_READ]; fd_pipe_r[PIPE_READ] = -1;
-                    fd_pipe_l[PIPE_WRITE] = fd_pipe_r[PIPE_WRITE]; fd_pipe_r[PIPE_WRITE] = -1;
-                    is_pipe = IS_PIPE_LEFT; // now on the left of the next command
+                    if (is_pipe == IS_PIPE_RIGHT) { // move the pipe for next command from right to left
+                        fd_pipe_l[PIPE_READ] = fd_pipe_r[PIPE_READ]; fd_pipe_r[PIPE_READ] = -1;
+                        fd_pipe_l[PIPE_WRITE] = fd_pipe_r[PIPE_WRITE]; fd_pipe_r[PIPE_WRITE] = -1;
+                        is_pipe = IS_PIPE_LEFT; // now on the left of the next command
+                    }
                 }
+
+                // if (shell_next_type != PARG_NTYPE_FINISHED) {
+                //     printf("NEXT [%c]\n", (shell_next_type == PARG_NTYPE_SEMICOLON) ? ';' : '|');
+                //     printf("with [%s]\n", shell_next_uinput);
+                // }
+
+                // free arguments used in program execution
+                freeArgs(shell_args, shell_argc, shell_redir_in, shell_redir_out);   
+                // printf("freed shell_...\n");
             }
-
-            // if (shell_next_type != PARG_NTYPE_FINISHED) {
-            //     printf("NEXT [%c]\n", (shell_next_type == PARG_NTYPE_SEMICOLON) ? ';' : '|');
-            //     printf("with [%s]\n", shell_next_uinput);
-            // }
-
-            // free arguments used in program execution
-            freeArgs(shell_args, shell_argc, shell_redir_in, shell_redir_out);   
-            // printf("freed shell_...\n");
-        }
      
-    };
+        };
+        freeHistory(history);
+        // printf("freed history\n");
+    }
 
     // free buffers
     free(uinput);
     // printf("freed uinput\n");
-    freeHistory(history);
-    // printf("freed history\n");
 
     return 0;
 }
