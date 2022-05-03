@@ -576,6 +576,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    reselected_shell_type:
     if (shell_type == SHELL_TYPE_CLIENT) {
         printf("[Running as CLIENT]\n");
 
@@ -606,7 +607,12 @@ int main(int argc, char* argv[]) {
                 if (uinput[0] == '\0') uinput[0] = ' '; // protection against zero-length messages (those cause communication freeze)
                 // printf("[%s]\n", uinput);
 
+                if      (strcmp(uinput, "halt") == 0) break; // only halting the client
                 write(s, uinput, strlen(uinput));
+                if      (strcmp(uinput, "quit") == 0) {
+                    shell_type = SHELL_TYPE_LOCAL;
+                    goto reselected_shell_type;
+                }
                 got_response = 0;
             }
             if (FD_ISSET(s, &rs)) { // server responded
@@ -669,7 +675,8 @@ int main(int argc, char* argv[]) {
 
         // server loop
         dprintf(sstdout, "Listening...\n");
-        while (1 == 1) {
+        char isQuit = 0;
+        while (!isQuit) {
             // prijat jedno spojenie (z max 5 cakajucich)
             if ((ds = accept(s, NULL, NULL)) == -1) {
                 perror("data socket");
@@ -685,20 +692,23 @@ int main(int argc, char* argv[]) {
                 dprintf(sstdout, ">> client: %s\n", uinput);
 
                 // -------------
-                // server action
+                // server action (different than local)
                 // -------------
 
                 // built-in command execution
                 // _todo argument parsing for built-ins (no use-case found for now)
                 char builtin = 1;
-                if      (strcmp(uinput, "halt") == 0) break; // break out of the interactive shell
-                else if (strcmp(uinput, "quit") == 0) break; // todo quit connection (client sends quit to server,
-                // todo server closes connection on socket, client realizes the connection is closed as planned and halts)
+                // no support for halt (reserved for client-only)
+                if (strcmp(uinput, "quit") == 0) {isQuit = 1; close(ds); break;} // quit (client sends quit to server, server closes connection on socket)
                 else if (strlen(uinput) >= 3 && strncmp(uinput, "cd ", 3) == 0) changedir(uinput + 3); // cd to arg
                 else if (strcmp(uinput, "cd") == 0) changedir(NULL); // cd to home on no args
                 else if (strcmp(uinput, "help") == 0) printf("%s\n", help); // print help
                 else    builtin = 0;
                 if (builtin) goto _response;
+
+                // -------------
+                // server action (completely identical with local)
+                // -------------
                 
                 // external command execution: handle each ';' and '|' delimited command
                 char shell_next_type = PARG_NTYPE_SEMICOLON; // default behavior for first run  as if next command after semicolon
@@ -787,7 +797,7 @@ int main(int argc, char* argv[]) {
                 }
 
                 // -------------
-                // server action end
+                // server action (completely identical with local) end
                 // -------------
 
                 _response:
@@ -839,8 +849,7 @@ int main(int argc, char* argv[]) {
             // _todo argument parsing for built-ins (no use-case found for now)
             char builtin = 1;
             if      (strcmp(uinput, "halt") == 0) break; // break out of the interactive shell
-            else if (strcmp(uinput, "quit") == 0) break; // todo quit connection (client sends quit to server,
-            // todo server closes connection on socket, client realizes the connection is closed as planned and halts)
+            else if (strcmp(uinput, "quit") == 0) break; // same behavior because there is no server in this case
             else if (strlen(uinput) >= 3 && strncmp(uinput, "cd ", 3) == 0) changedir(uinput + 3); // cd to arg
             else if (strcmp(uinput, "cd") == 0) changedir(NULL); // cd to home on no args
             else if (strcmp(uinput, "help") == 0) printf("%s\n", help); // print help
