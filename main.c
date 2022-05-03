@@ -7,7 +7,9 @@
 #include <sys/wait.h>
 #include <fcntl.h> // O_ definitions
 #include <sys/socket.h>
-#include <sys/un.h>       
+#include <sys/un.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>       
 #include <errno.h>
 #include "syscall.h"
 
@@ -29,7 +31,7 @@
 #endif
 
 // configurables
-#define SHELL_SOCKNAME_MAX 255
+#define SHELL_SOCKNAME_MAX 108
 #define SHELL_USERINPUT_MAX 4096
 #define SHELL_HISTORY_MAX 20
 
@@ -547,33 +549,50 @@ void freeHistory(char **history) {
 int main(int argc, char* argv[]) {
     // argument handling
     char shell_type = SHELL_TYPE_LOCAL;
-    int shell_port = 0; // todo
-    char shell_sockname[SHELL_SOCKNAME_MAX]; // todo
-    memset(shell_sockname, '\0', sizeof(shell_sockname));
-    if (processArgs(argc, argv, &shell_type, &shell_port, shell_sockname, sizeof(shell_sockname))) return ERR_WRONGARG;
+    int sock_port = -1;
+    char sock_path[SHELL_SOCKNAME_MAX];
+    memset(sock_path, '\0', sizeof(sock_path));
+    if (processArgs(argc, argv, &shell_type, &sock_port, sock_path, sizeof(sock_path))) return ERR_WRONGARG;
 
     // socket related
     int s, r;                                   // client + server
     int ds;                                     // server only
     fd_set rs;	                                // client deskriptory pre select()
-    struct sockaddr_un sock_addr;		        // adresa pre soket
-    char sock_path[] = "/dev/socket_seehell";   // todo
+    char use_port = sock_port == -1 ? 0 : 1;
+    struct sockaddr_un sock_addr;		        // adresa pre path soket (AF_LOCAL)
+    struct sockaddr_in sock_addri;		        // adresa pre port soket (AF_INET)
+    // struct in_addr sock_addri_sin_addr;         // podstruktura AF_INET
 
     // user input buffer and received message buffer (merged for now)
     char uinput[SHELL_USERINPUT_MAX];
     memset(uinput, '\0', sizeof(uinput));
 
     if (shell_type == SHELL_TYPE_CLIENT || shell_type == SHELL_TYPE_SERVER) {
-        printf("[Registering a socket]\n");
-        memset(&sock_addr, 0, sizeof(sock_addr));
-        sock_addr.sun_family = AF_LOCAL;
-        strcpy(sock_addr.sun_path, sock_path);	    // adresa = meno soketu (rovnake ako pouziva klient)
+        printf("[Registering a %s socket]\n", use_port ? "port-based (AF_INET) IP" : "path-based (AF_LOCAL)");
 
-        if ((s = socket(PF_LOCAL, SOCK_STREAM, 0)) == -1) {
-            // vytvorenie socketu
-            perror("socket");
-            return ERR_SOCKET;
+        if (use_port) {
+            memset(&sock_addri, 0, sizeof(sock_addri));
+            // memset(&sock_addri_sin_addr, 0, sizeof(sock_addri_sin_addr));
+            sock_addri.sin_family = AF_INET;
+            sock_addri.sin_port = (u_short)sock_port;
+            // sock_addri_sin_addr = inet_addr("127.0.0.1");
+            sock_addri.sin_addr.s_addr = inet_addr("127.0.0.1");
+            if ((s = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+                // vytvorenie socketu
+                perror("socket");
+                return ERR_SOCKET;
+            }
+        } else {
+            memset(&sock_addr, 0, sizeof(sock_addr));
+            sock_addr.sun_family = AF_LOCAL;
+            strcpy(sock_addr.sun_path, sock_path);	    // adresa = meno soketu (rovnake ako pouziva klient)
+            if ((s = socket(PF_LOCAL, SOCK_STREAM, 0)) == -1) {
+                // vytvorenie socketu
+                perror("socket");
+                return ERR_SOCKET;
+            }
         }
+
     }
 
     reselected_shell_type:
@@ -582,10 +601,18 @@ int main(int argc, char* argv[]) {
 
         char got_response = 1;
 
-        if ((connect(s, (struct sockaddr*)&sock_addr, sizeof(sock_addr))) == -1) {
-            // pripojenie na server
-            perror("socket connect");
-            return ERR_SOCKET;
+        if (use_port) {
+            if ((connect(s, (struct sockaddr*)&sock_addri, sizeof(sock_addri))) == -1) {
+                // pripojenie na server
+                perror("socket connect");
+                return ERR_SOCKET;
+            }
+        } else {
+            if ((connect(s, (struct sockaddr*)&sock_addr, sizeof(sock_addr))) == -1) {
+                // pripojenie na server
+                perror("socket connect");
+                return ERR_SOCKET;
+            }
         }
 
         // get prompt (+ protection against zero-length)
@@ -640,11 +667,19 @@ int main(int argc, char* argv[]) {
                 perror("socket unlink"); 
                 return ERR_SOCKET;
             }
-        }		
-        if (bind(s, (struct sockaddr*)&sock_addr, sizeof(sock_addr)) == -1) {	
-            // zviazat soket s lokalnou adresou
-            perror("socket bind");
-            return ERR_SOCKET;
+        }	
+        if (use_port) {
+            if (bind(s, (struct sockaddr*)&sock_addri, sizeof(sock_addri)) == -1) {	
+                // zviazat soket s lokalnou adresou
+                perror("socket bind");
+                return ERR_SOCKET;
+            }
+        } else {
+            if (bind(s, (struct sockaddr*)&sock_addr, sizeof(sock_addr)) == -1) {	
+                // zviazat soket s lokalnou adresou
+                perror("socket bind");
+                return ERR_SOCKET;
+            }
         }
         if (listen(s, 5) == -1) { 
             // s je hlavny soket, len pocuva
