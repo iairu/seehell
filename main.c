@@ -579,8 +579,6 @@ int main(int argc, char* argv[]) {
     if (shell_type == SHELL_TYPE_CLIENT) {
         printf("[Running as CLIENT]\n");
 
-        // show local prompt // todo retrieve from server
-        printPrompt();
         char got_response = 1;
 
         if ((connect(s, (struct sockaddr*)&sock_addr, sizeof(sock_addr))) == -1) {
@@ -588,6 +586,9 @@ int main(int argc, char* argv[]) {
             perror("socket connect");
             return ERR_SOCKET;
         }
+
+        // get prompt (+ protection against zero-length)
+        write(s, " ", 1);
 
         // toto umoznuje klientovi cakat na vstup z terminalu (stdin) alebo zo soketu
         // co je prave pripravene, to sa obsluzi (nezalezi na poradi v akom to pride)
@@ -602,6 +603,7 @@ int main(int argc, char* argv[]) {
                 rewind(stdin);                        // remove any trailing STDIN
                 uinput[strcspn(uinput, "\n")] = '\0'; // remove trailing newline STDOUT
                 uinput[SHELL_USERINPUT_MAX - 1] = '\0'; // guarantee proper ending
+                if (uinput[0] == '\0') uinput[0] = ' '; // protection against zero-length messages (those cause communication freeze)
                 // printf("[%s]\n", uinput);
 
                 write(s, uinput, strlen(uinput));
@@ -612,14 +614,10 @@ int main(int argc, char* argv[]) {
                 r = read(s, uinput, SHELL_USERINPUT_MAX);
                 uinput[SHELL_USERINPUT_MAX - 1] = '\0';
                 // printf("[server response]\n");
-                printf("%s\n", uinput);
+                printf("%s", uinput);
                 // printf("[server response end]\n");
                 // allow user input again (response finished)
                 got_response = 1;
-            }
-            if (got_response) {
-                // show local prompt // todo retrieve from server
-                printPrompt();
             }
             // connect() mnoziny meni, takze ich treba znova nastavit
             FD_ZERO(&rs);
@@ -794,17 +792,24 @@ int main(int argc, char* argv[]) {
 
                 _response:
 
+                // show server's prompt on client at the end of the message
+                printPrompt();
+                putchar('\n');
+
                 // response handling
                 fflush(stdout);
                 memset(uinput, '\0', SHELL_USERINPUT_MAX);
                 // putchar('\0');
-                read(fd_pipe_server[PIPE_READ], uinput, SHELL_USERINPUT_MAX - 1); // piped stdout to buffer
-                uinput[SHELL_USERINPUT_MAX - 1] = '\0';
-                // dprintf(sstdout, ">> server sent buffered response");
-                if (write(ds, uinput, strlen(uinput)) == -1) {
-                    perror("data socket write");
-                    return ERR_SOCKET;
-                }
+                while (read(fd_pipe_server[PIPE_READ], uinput, SHELL_USERINPUT_MAX - 1) > 0) { // piped stdout to buffer
+                    uinput[SHELL_USERINPUT_MAX - 1] = '\0';
+                    // dprintf(sstdout, ">> server sent buffered response");
+                    if (write(ds, uinput, strlen(uinput)) == -1) {
+                        perror("data socket write");
+                        return ERR_SOCKET;
+                    }
+                    fflush(stdout);
+                    memset(uinput, '\0', SHELL_USERINPUT_MAX);
+                } 
             }
             perror("data socket read");
             close(ds);
