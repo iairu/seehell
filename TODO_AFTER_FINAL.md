@@ -1,9 +1,8 @@
+
+before adding to my portfolio:
+
 - translate leftover slovak comments
-- prepend assignment text to main.c into comments
-- prepend done bonuses from assignment
-
-
 - append additional comments and stuff
+- refactor repeated code into functions (esp. local and server execution part)
 - update README
-- (add to my portfolio)
 
