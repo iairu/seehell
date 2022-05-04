@@ -1,3 +1,43 @@
+/*
+Napíšte v jazyku C jednoduchý interaktívnyprogram,"shell", ktorý bude opakovane čakať na zadanie príkazu apotom ho spracuje. Na základe princípov klient-server 
+architektúry tak musí spomocou  argumentov umožňovať funkciu  servera  aj  klienta.Program  musí  umožňovať spúšťať zadané príkazy a bude tiež interpretovať 
+aspoň nasledujúce špeciálne znaky:# ; < > | \.  Príkazy  musí  byť  možné  zadať  zo  štandardného  vstupu  a  tiež  zo  spojení reprezentovaných  soketmi.  
+Na  príkazovom  riadku  musí  byť  možné  špecifikovať prepínačom-pportčíslo portu a/aleboprepínačom-ucestanázov lokálneho soketu na ktorých bude program čakať 
+na prichádzajúce spojenia. Po spustení s prepínačom-hsa musia vypísať  informácie  o  autorovi, účele  a  použití  programu,  zoznam  príkazov.  "Shell"  musí 
+poskytovať  aspoň  nasledujúce  interné  príkazy:help-výpis  informácií  ako  pri-h,quit-ukončenie spojenia z ktorého príkaz prišiel,halt-ukončenie celého 
+programu.Prednastavený prompt musí pozostávať z mena používateľa, názvu stroja, aktuálneho času a zvoleného ukončovacieho znaku, e.g. '16:34 user17@student#'. 
+Na zistenie týchto informácií použitevhodné systémové volaniaspoužitím knižničných funkcií. Na formátovanie výstupu, zistenie  mena používateľa z UID a pod. 
+môžte v programe využiť bežné knižničné funkcie. Spúšťanie príkazov a presmerovanie súborov musia byť implementované pomocou príslušných systémových  volaní.  
+Tie  nemusia  byť  urobené  priamo  (cez  assembler),  avšak  knižničná funkciapopen(),  prípadne  podobná,  nesmie  byť  použitá.Pri  spustení  programu  bez 
+argumentov, alebo s argumentom"-s"sa program bude správať vyššie uvedeným spôsobom, teda  ako  server.  Sprepínačom "-c"sa  bude  správať  ako  klient,  teda  
+program  nadviaže spojenie so serverom cez socket, do ktorého bude posielať svoj štandardný vstup ačítať dáta pre výstup. Chybové stavy ošetrite bežným 
+spôsobom. Počas vytvárania programu (najmä kompilácie) sa  nesmú  zobrazovať  žiadne  varovania  a  to  ani  pri  zadanom  prepínači prekladača-Wall.Vo 
+voliteľných častiach zadania sa očakáva,  že tie úlohy budú mať vaše vlastné riešenia, nie jednoduché volania OS.
+
+? 7.(3 body) Na zistenie informácií do prednastaveného promptu (meno užívateľa, názvu stroja, aktuálneho času azvoleného ukončovacieho znaku)použte vhodné 
+systémové volania priamo (napr. cez "inline assembler"), bez použitia knižničných funkcií.
+    - neviem ci dostatocne pretoze systemove volanie pre ziskanie pouzivatelskeho mena rovno vybera cely zaznam v /etc/passwd do struktury
+    - ostatne volania (kde sa dalo a bola podpora) implementovane cez int 0x80 assembly
+
+o 9.(3 body) S prepínačom "-c" v kombinácii s "-i", resp. "-u" sa bude program správať akoklient, teda pripojí sa na daný soket a bude do neho posielať svoj 
+štandardný vstup a zobrazovať prichádzajúci obsah na výstup.
+    - vsetko sedi, len -i nie je implementovane (to bolo v separatnej volitelnej ulohe)
+
+? 10.(2 body) Podpora pre špeciálne znaky'', zrušenie významu špeciálnych znakov medzi nimi (kvótovanie).
+    - namiesto '' som implementoval ""
+    - escaping specialnych znakov je v nich zatial dost limitovany, zameral som sa pri nich hlavne na spracovanie poctu medzier a pod.
+
+o 17.(2 body) Jeden z príkazov bude využívať funkcie implementované v samostatnej knižnici, ktorá bude "prilinkovaná" k hlavnému programu.
+    - vsetko sedi, syscall.h ako rozhranie na syscall.S a samozrejme aj samotny syscall.S
+
+o 28.(2 body) Funkčný Makefile.
+    - vsetko sedi, snaha bola nemat ho uplne jednoduchy (myslim ze moze byt)
+
+x 30.(1 bod) Dobré komentáre, resp. rozšírená dokumentácia, v anglickom jazyku.
+    - bola snaha, ale nepodarilo sa mi okomentovat vsetko, taktiez aj prelozit niektore komentare kvoli casovemu sklzu
+
+*/
+
 #include <stdio.h> // main entry point, printf
 #include <string.h> // strcat
 #include <stdlib.h> // malloc
