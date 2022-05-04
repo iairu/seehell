@@ -27,8 +27,9 @@ o 9.(3 body) S prepínačom "-c" v kombinácii s "-i", resp. "-u" sa bude progra
     - namiesto '' som implementoval ""
     - escaping specialnych znakov je v nich zatial dost limitovany, zameral som sa pri nich hlavne na spracovanie poctu medzier a pod.
 
-o 17.(2 body) Jeden z príkazov bude využívať funkcie implementované v samostatnej knižnici, ktorá bude "prilinkovaná" k hlavnému programu.
-    - vsetko sedi, syscall.h ako rozhranie na syscall.S a samozrejme aj samotny syscall.S
+? 17.(2 body) Jeden z príkazov bude využívať funkcie implementované v samostatnej knižnici, ktorá bude "prilinkovaná" k hlavnému programu.
+    - nezameral som sa na prikazy, ale na systemove volania - prikazy su vsetky implementovane priamo tu
+    - samostatna kniznica: syscall.h ako rozhranie na syscall.S a samozrejme aj samotny syscall.S
 
 o 28.(2 body) Funkčný Makefile.
     - vsetko sedi, snaha bola nemat ho uplne jednoduchy (myslim ze moze byt)
